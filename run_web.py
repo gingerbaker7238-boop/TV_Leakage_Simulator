@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.9"
+WEB_UI_VERSION = "0.7.10"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -572,23 +572,56 @@ def _build_html_form(material_options: str, version: str) -> str:
     .tip {{ font-size: 12px; color: #94a3b8; }}
     .coord-badge {{
       position: absolute;
-      left: 18px;
-      bottom: 18px;
-      z-index: 5;
-      min-width: 220px;
-      padding: 10px 12px;
+      left: 16px;
+      top: 54px;
+      z-index: 8;
+      width: min(430px, calc(100% - 32px));
       border-radius: 10px;
-      background: rgba(15, 23, 42, 0.88);
+      background: rgba(15, 23, 42, 0.82);
       border: 1px solid rgba(148, 163, 184, 0.25);
       color: #e2e8f0;
       box-shadow: 0 8px 24px rgba(2, 6, 23, 0.25);
+      backdrop-filter: blur(8px);
+      overflow: hidden;
+    }}
+    .coord-badge summary {{
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      cursor: pointer;
+      list-style: none;
+    }}
+    .coord-badge summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .coord-badge summary::after {{
+      content: '▸';
+      color: #93c5fd;
+      font-size: 11px;
+      justify-self: end;
+      grid-column: 3;
+      transition: transform 0.16s ease;
+    }}
+    .coord-badge[open] summary::after {{
+      transform: rotate(90deg);
     }}
     .coord-badge .t {{
       font-size: 11px;
       color: #93c5fd;
-      margin-bottom: 4px;
+      font-weight: 800;
+      white-space: nowrap;
+    }}
+    .coord-badge .s {{
+      color: #cbd5e1;
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }}
     .coord-badge .v {{
+      padding: 0 10px 9px;
       font-size: 11px;
       color: #cbd5e1;
       line-height: 1.45;
@@ -1631,10 +1664,13 @@ def _build_html_form(material_options: str, version: str) -> str:
             <canvas id=\"roiCanvas\" class=\"viewer-canvas\"></canvas>
             <div id=\"threeRoiViewer\" class=\"three-viewer\"></div>
           </section>
-        </div>
-        <div class=\"coord-badge\">
-          <div class=\"t\">World coordinates</div>
-          <div id=\"coordReadout\" class=\"v\">Origin: (0, 0, 0)</div>
+          <details class=\"coord-badge\">
+            <summary>
+              <span class=\"t\">World coordinates</span>
+              <span id=\"coordSummary\" class=\"s\">No model loaded</span>
+            </summary>
+            <div id=\"coordReadout\" class=\"v\">Origin: (0, 0, 0)</div>
+          </details>
         </div>
         <div id=\"viewerMovePanel\" class=\"move-panel viewer-move-panel-disabled hidden-block\" aria-hidden=\"true\">
           <div class=\"move-title\">
@@ -2327,6 +2363,7 @@ def _build_html_form(material_options: str, version: str) -> str:
     const axisScale = document.getElementById('axisScale');
     const axisScaleValue = document.getElementById('axisScaleValue');
     const coordReadout = document.getElementById('coordReadout');
+    const coordSummary = document.getElementById('coordSummary');
     const fullCanvas = document.getElementById('canvas3d');
     const roiCanvas = document.getElementById('roiCanvas');
     const threeFullViewer = document.getElementById('threeFullViewer');
@@ -3473,12 +3510,19 @@ def _build_html_form(material_options: str, version: str) -> str:
 
     function updateCoordReadout(scene) {{
       if (!scene) {{
+        coordSummary.textContent = 'No model loaded';
         coordReadout.textContent = 'Origin: (0, 0, 0)';
         return;
       }}
       const bboxMin = scene.bboxMin.map(v => Number(v).toFixed(2)).join(', ');
       const bboxMax = scene.bboxMax.map(v => Number(v).toFixed(2)).join(', ');
       const center = scene.center.map(v => Number(v).toFixed(2)).join(', ');
+      const size = [
+        scene.bboxMax[0] - scene.bboxMin[0],
+        scene.bboxMax[1] - scene.bboxMin[1],
+        scene.bboxMax[2] - scene.bboxMin[2]
+      ].map(v => Number(v).toFixed(2)).join(' × ');
+      coordSummary.textContent = 'Center (' + center + ') · Size ' + size + ' mm';
       coordReadout.textContent = 'Origin: (0.00, 0.00, 0.00)\\nCenter: (' + center + ')\\nBBox min: (' + bboxMin + ')\\nBBox max: (' + bboxMax + ')';
     }}
 
