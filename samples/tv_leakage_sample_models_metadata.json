@@ -1,0 +1,40 @@
+{
+  "schema": "tv_leakage_sample_models.v1",
+  "units": "mm",
+  "coordinate_system": {
+    "x": "TV left-right",
+    "y": "TV bottom-top",
+    "z": "TV rear-front"
+  },
+  "parts": [
+    "Chassis_Rear",
+    "LCD_Cell_3T",
+    "Frame_Middle_FMB",
+    "Cover_Deco"
+  ],
+  "models": {
+    "full_no_gap": "tv_leakage_full_assembled_no_gap.stp",
+    "roi_left_bottom_no_gap": "tv_leakage_roi_left_bottom_no_gap.stp",
+    "roi_right_bottom_no_gap": "tv_leakage_roi_right_bottom_no_gap.stp"
+  },
+  "full_model_size_mm": [
+    800.0,
+    450.0,
+    45.0
+  ],
+  "roi_model_size_mm": [
+    60.0,
+    60.0,
+    45.0
+  ],
+  "intentional_gap": false,
+  "notes": [
+    "No-gap assembled baseline model.",
+    "Use component transform to create leakage gaps later.",
+    "Bottom left/right ROI models are simplified local corner cuts for ray tracing experiments."
+  ],
+  "suggested_rt1": {
+    "emitter_candidate": "Chassis_Rear inner lower hemming surface around y=18..30, z=24..30",
+    "receiver_candidate": "outside front/bottom near Cover_Deco seam, z > 45"
+  }
+}
