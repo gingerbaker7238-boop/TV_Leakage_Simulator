@@ -213,6 +213,23 @@ nit_est_j = k_abs * L_rel_j
 - synthetic mesh 없이도 dataclass/json 변환이 되는지 확인
 - 단위가 `mm`, `lumen`, `nit_est`로 명확한지 확인
 
+구현 위치:
+- `src/leakage_simulator/types.py`
+
+RT-0 구현 상태:
+- `EmitterSpec`: 면 광원, normal mode, 방향 분포, lumen power, ray count 계약
+- `ReceiverSpec`: rectangular receiver, center/normal/size/resolution/acceptance angle 계약
+- `OpticalProfile`: reflectance, absorption, specular/diffuse ratio, scatter model 계약
+- `RayTraceConfig`: ray count, max depth, seed, epsilon, 보정 상수, termination mode 계약
+- `RayHit`: surface/receiver hit event 기록 계약
+- `ReceiverGrid`: receiver heatmap bin 누적 계약
+- `RayTraceResult`: ray tracing run 결과 top-level 계약
+
+RT-0 주의사항:
+- 기존 `EmitterConfig`, `ReceiverPatchConfig`, `RunConfig`, `SimulationOutput`은 V0/V1 legacy 실행 흐름과 호환성을 위해 유지한다.
+- 새 ray tracing 구현은 `EmitterSpec`, `ReceiverSpec`, `OpticalProfile`, `RayTraceConfig`를 우선 사용한다.
+- UI에서 넘어오는 값은 backend 진입 시점에 이 dataclass로 변환하여 검증한다.
+
 ### Phase RT-1: 최소 ray engine
 목표:
 - 단일 면 emitter에서 ray를 생성한다.
@@ -327,7 +344,7 @@ src/leakage_simulator/raytracing/
 ```
 
 ## 우선 구현 순서
-1. `Phase RT-0` 데이터 구조를 `types.py` 또는 `raytracer.py`에 추가한다.
+1. `Phase RT-0` 데이터 구조를 `types.py`에 추가한다. `[완료]`
 2. synthetic plane emitter/receiver 테스트를 만든다.
 3. direct ray hit 기반 receiver heatmap을 JSON/CSV로 출력한다.
 4. Web UI의 Ray tracing 메뉴에 최소 입력값을 연결한다.
@@ -345,4 +362,4 @@ src/leakage_simulator/raytracing/
 - V1은 파이썬 자체 ray tracing으로 시작한다.
 - 정확도 검증을 위해 알고리즘을 투명하게 유지한다.
 - 속도 병목이 확인된 지점에만 BVH/NumPy/Numba/Open3D 같은 가속을 붙인다.
-- 다음 실제 개발 단계는 `Phase RT-0: 데이터 계약 고정`이다.
+- 다음 실제 개발 단계는 `Phase RT-1: 면 emitter + direct receiver hit`이다.

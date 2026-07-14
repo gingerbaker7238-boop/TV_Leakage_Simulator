@@ -29,3 +29,27 @@
 - `src/leakage_simulator/types.py` 또는 `src/leakage_simulator/raytracer.py`에 ray tracing dataclass를 추가한다.
 - synthetic plane emitter/receiver 테스트 케이스를 만든다.
 - direct ray hit 기반 receiver heatmap 출력부터 구현한다.
+
+## RT-0 구현 완료
+- `src/leakage_simulator/types.py`에 ray tracing V1 데이터 계약을 추가했다.
+- 추가된 계약:
+  - `EmitterSpec`
+  - `ReceiverSpec`
+  - `OpticalProfile`
+  - `RayTraceConfig`
+  - `RayHit`
+  - `ReceiverGrid`
+  - `RayTraceResult`
+- 기존 legacy 실행 흐름의 `EmitterConfig`, `ReceiverPatchConfig`, `RunConfig`, `SimulationOutput`은 유지했다.
+- `EmitterSpec`는 면 광원, normal mode, lambertian/isotropic/gaussian 방향 분포, lumen power 입력을 검증한다.
+- `ReceiverSpec`는 rectangular receiver의 좌표, normal, size, resolution, acceptance angle을 검증한다.
+- `OpticalProfile`은 reflectance/absorption/specular/diffuse/scatter model을 ray tracing용으로 고정한다.
+- `ReceiverGrid.empty()`로 receiver heatmap bin 초기화를 만들 수 있게 했다.
+
+## RT-0 검증
+- `python -m py_compile src/leakage_simulator/types.py`
+- `EmitterSpec`, `ReceiverSpec`, `OpticalProfile`, `RayTraceConfig`, `ReceiverGrid`, `RayTraceResult` 생성 및 `to_dict()` smoke test
+
+## 다음 작업 업데이트
+- 다음 단계는 `RT-1: 면 emitter + direct receiver hit` 구현이다.
+- synthetic plane emitter/receiver 기준으로 direct hit heatmap을 먼저 구현한다.
