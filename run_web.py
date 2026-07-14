@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.6"
+WEB_UI_VERSION = "0.7.7"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -1283,14 +1283,14 @@ def _build_html_form(material_options: str, version: str) -> str:
           <input id=\"gapTiltCombined\" name=\"gap_tilt_xyz\" type=\"hidden\" value=\"0,0,0\" />
           <input name=\"gap_nominal\" type=\"hidden\" value=\"0.0\" />
           <div id=\"gapModeHint\" class=\"move-sub hidden-block\">Transform 방식과 selection mode는 오른쪽 3D viewer popup에서 설정합니다.</div>
-          <details>
-            <summary>Information</summary>
-            <div id=\"componentSelectionSummary\" class=\"move-summary\">선택된 부품 없음</div>
-          </details>
           <label>Component Tree</label>
           <div id=\"gapObjectList\" class=\"object-list\">
             <div class=\"small\">Load CAD first</div>
           </div>
+          <details>
+            <summary>Information</summary>
+            <div id=\"componentSelectionSummary\" class=\"move-summary\">선택된 부품 없음</div>
+          </details>
         </div>
           </div>
           </div>
@@ -1346,9 +1346,19 @@ def _build_html_form(material_options: str, version: str) -> str:
           <div class=\"side-panel-body\">
           <div class=\"card\">
             <div class=\"step\">Step 5</div>
-            <h2>Material Library</h2>
-            <div class=\"move-sub\">왼쪽은 라이브러리/등록/업로드용, 실제 부품 지정은 오른쪽 3D viewer의 Material popup에서 수행합니다.</div>
-            <div id=\"materialTargetSummary\" class=\"move-summary\">선택된 material 대상 부품 없음</div>
+            <div class=\"section-title-with-help\">
+              <h2>Material Library</h2>
+              <span class=\"help-tip\" tabindex=\"0\" aria-label=\"Material library help\">?</span>
+              <div class=\"help-popover\">
+                왼쪽 메뉴는 material library 등록/수정/업로드용입니다.<br>
+                실제 부품별 material 지정은 Component의 <b>Material</b> 버튼 또는 오른쪽 3D viewer의 Material popup에서 수행합니다.<br>
+                선택 대상과 적용 상태는 아래 <b>Information</b>을 열어 확인하세요.
+              </div>
+            </div>
+            <details>
+              <summary>Information</summary>
+              <div id=\"materialTargetSummary\" class=\"move-summary\">선택된 material 대상 부품 없음</div>
+            </details>
             <details class=\"library-tree\" open>
               <summary class=\"library-tree-head\">
                 <div>
