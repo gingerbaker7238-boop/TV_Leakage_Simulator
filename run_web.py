@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.4"
+WEB_UI_VERSION = "0.7.5"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -712,6 +712,29 @@ def _build_html_form(material_options: str, version: str) -> str:
       border-top: 1px solid rgba(148, 163, 184, 0.18);
       border-radius: 0;
     }}
+    .manager-details {{
+      margin: 10px 0 8px;
+      border-radius: 10px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      overflow: hidden;
+    }}
+    .manager-details summary {{
+      padding: 9px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: #334155;
+      user-select: none;
+    }}
+    .manager-details .move-summary {{
+      margin: 0;
+      border: 0;
+      border-top: 1px solid #e2e8f0;
+      border-radius: 0;
+      background: #64748b;
+      color: #f8fafc;
+    }}
     .move-stack {{
       display: grid;
       grid-template-columns: 1fr;
@@ -1297,10 +1320,21 @@ def _build_html_form(material_options: str, version: str) -> str:
           <div class=\"side-panel-body\">
           <div class=\"card\">
           <div class=\"step\">Step 4</div>
-          <h2>Transform Manager</h2>
-          <div class=\"move-sub\">입력은 오른쪽 3D viewer의 transform 창에서 하고, 이 탭은 적용된 transform과 gap 해석 정보를 보는 용도입니다.</div>
+          <div class=\"section-title-with-help\">
+            <h2>Transform Manager</h2>
+            <span class=\"help-tip\" tabindex=\"0\" aria-label=\"Transform manager help\">?</span>
+            <div class=\"help-popover\">
+              Transform 입력은 오른쪽 3D viewer의 popup에서 수행합니다.<br>
+              이 메뉴는 적용된 transform rule과 gap 해석 정보를 관리/확인하는 영역입니다.<br>
+              상세 상태는 아래 <b>Details</b>를 열어 확인하세요.
+            </div>
+          </div>
           <div id=\"transformRulePanel\">
-            <div id=\"transformSelectionSummary\" class=\"move-summary\">Transform rule 없음. Components 탭에서 `Transform`을 눌러 시작하세요.</div>
+            <details class=\"manager-details\">
+              <summary>Details</summary>
+              <div id=\"transformSelectionSummary\" class=\"move-summary\">Transform rule 없음. Components 탭에서 `Transform`을 눌러 시작하세요.</div>
+              <div class=\"move-summary\" id=\"gapMoveSummary\">선택된 대상 없음</div>
+            </details>
             <label>Applied Transform Rules</label>
             <div id=\"transformRuleList\" class=\"object-list manager-list\"></div>
             <div id=\"transformManagerEmpty\" class=\"manager-empty\">아직 등록된 component transform rule이 없습니다.</div>
@@ -1315,7 +1349,6 @@ def _build_html_form(material_options: str, version: str) -> str:
             </div>
           </div>
           <label><input id=\"previewOverlayToggle\" type=\"checkbox\" checked> 이동 전/후 preview overlay 표시</label>
-          <div class=\"move-summary\" id=\"gapMoveSummary\">선택된 대상 없음</div>
           <details>
             <summary>Advanced</summary>
             <div class=\"grid\" style=\"margin-top: 8px;\">
