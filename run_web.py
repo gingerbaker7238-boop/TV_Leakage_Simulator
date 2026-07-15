@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.12"
+WEB_UI_VERSION = "0.7.13"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -1656,7 +1656,7 @@ def _build_html_form(material_options: str, version: str) -> str:
           </div>
           <span id=\"renderModeBadge\" class=\"mode-badge\">Wireframe</span>
         </div>
-        <div id=\"viewerTip\" class=\"tip\">Drag = rotate, Wheel = zoom, Camera preset = 정면/측면 보기 고정.</div>
+        <div id=\"viewerTip\" class=\"tip\">Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll.</div>
       </div>
       <div class=\"viewer-inner\">
         <div class=\"kpi\">
@@ -1996,7 +1996,7 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.controls.maxPolarAngle = Math.PI - 0.0001;
         this.controls.mouseButtons = {{
           LEFT: THREE.MOUSE.ROTATE,
-          MIDDLE: THREE.MOUSE.DOLLY,
+          MIDDLE: THREE.MOUSE.ROTATE,
           RIGHT: THREE.MOUSE.PAN
         }};
         this.controls.touches = {{
@@ -2016,6 +2016,10 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.scene.add(light);
 
         this.mesh = null;
+        this.raycaster = new THREE.Raycaster();
+        this.pointer = new THREE.Vector2();
+        this.pointerDown = null;
+        this.rollDrag = {{ active: false, lastX: 0 }};
         this.center = new THREE.Vector3(0, 0, 0);
         this.size = 1;
         this.renderMode = 'wireframe';
@@ -2023,8 +2027,106 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.lastMeshRef = null;
         this.resizeObserver = new ResizeObserver(() => this.resize());
         this.resizeObserver.observe(this.container);
+        this.renderer.domElement.addEventListener('contextmenu', (ev) => ev.preventDefault());
+        this.renderer.domElement.addEventListener('pointerdown', (ev) => this.handlePointerDown(ev));
+        this.renderer.domElement.addEventListener('pointermove', (ev) => this.handlePointerMove(ev));
+        this.renderer.domElement.addEventListener('pointerup', (ev) => this.handlePointerUp(ev));
+        this.renderer.domElement.addEventListener('pointercancel', (ev) => this.handlePointerCancel(ev));
         this.animate = this.animate.bind(this);
         requestAnimationFrame(this.animate);
+      }}
+
+      handlePointerDown(ev) {{
+        this.pointerDown = {{
+          x: ev.clientX,
+          y: ev.clientY,
+          button: ev.button,
+          ctrlKey: ev.ctrlKey,
+          metaKey: ev.metaKey,
+          shiftKey: ev.shiftKey,
+          altKey: ev.altKey
+        }};
+        if ((ev.shiftKey || ev.altKey) && ev.button === 0) {{
+          this.rollDrag.active = true;
+          this.rollDrag.lastX = ev.clientX;
+          this.controls.enabled = false;
+          this.renderer.domElement.setPointerCapture?.(ev.pointerId);
+          ev.preventDefault();
+        }}
+      }}
+
+      handlePointerMove(ev) {{
+        if (!this.rollDrag.active) return;
+        const dx = ev.clientX - this.rollDrag.lastX;
+        this.rollDrag.lastX = ev.clientX;
+        this.rollCamera(dx * 0.012);
+        ev.preventDefault();
+      }}
+
+      handlePointerUp(ev) {{
+        const wasRoll = this.rollDrag.active;
+        this.handlePointerCancel(ev);
+        if (wasRoll || !this.pointerDown) return;
+        const move = Math.abs(ev.clientX - this.pointerDown.x) + Math.abs(ev.clientY - this.pointerDown.y);
+        const isPrimaryClick = this.pointerDown.button === 0 && ev.button === 0;
+        if (isPrimaryClick && move <= 6) {{
+          const faceIndex = this.pickFace(ev);
+          this.container.dispatchEvent(new CustomEvent('leakage-three-pick', {{
+            bubbles: true,
+            detail: {{
+              faceIndex,
+              mode: this.mode,
+              clientX: ev.clientX,
+              clientY: ev.clientY,
+              ctrlKey: ev.ctrlKey || this.pointerDown.ctrlKey,
+              metaKey: ev.metaKey || this.pointerDown.metaKey,
+              shiftKey: ev.shiftKey || this.pointerDown.shiftKey,
+              altKey: ev.altKey || this.pointerDown.altKey
+            }}
+          }}));
+        }}
+        this.pointerDown = null;
+      }}
+
+      handlePointerCancel(ev) {{
+        if (this.rollDrag.active) {{
+          this.rollDrag.active = false;
+          this.controls.enabled = true;
+          try {{
+            this.renderer.domElement.releasePointerCapture?.(ev.pointerId);
+          }} catch (err) {{}}
+        }}
+      }}
+
+      rollCamera(angleRad) {{
+        const viewAxis = new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();
+        this.camera.up.applyAxisAngle(viewAxis, -angleRad).normalize();
+        this.camera.lookAt(this.controls.target);
+        this.controls.update();
+      }}
+
+      pickFace(ev) {{
+        const rect = this.renderer.domElement.getBoundingClientRect();
+        this.pointer.x = ((ev.clientX - rect.left) / Math.max(rect.width, 1)) * 2 - 1;
+        this.pointer.y = -((ev.clientY - rect.top) / Math.max(rect.height, 1)) * 2 + 1;
+        this.raycaster.setFromCamera(this.pointer, this.camera);
+        const candidates = [];
+        const surface = this.root.getObjectByName('surface');
+        if (surface) candidates.push(surface);
+        for (const child of this.overlayRoot.children) {{
+          if (child.isMesh) candidates.push(child);
+        }}
+        const hits = this.raycaster.intersectObjects(candidates, false);
+        if (!hits.length) return null;
+        for (const hit of hits) {{
+          const sourceFaceIds = hit.object.geometry && hit.object.geometry.userData
+            ? hit.object.geometry.userData.sourceFaceIds
+            : null;
+          if (!sourceFaceIds || hit.faceIndex === null || hit.faceIndex === undefined) continue;
+          const sourceFace = sourceFaceIds[hit.faceIndex];
+          if (sourceFace !== null && sourceFace !== undefined) return sourceFace;
+        }}
+        return null;
       }}
 
       clearRoot() {{
@@ -3181,8 +3283,8 @@ def _build_html_form(material_options: str, version: str) -> str:
       if (state.gapTargetMode === 'face_gap') {{
         roiModeHint.textContent = '현재는 Local face move 선택 모드입니다. ROI는 선택사항이며, 3D viewer 클릭은 local face target 선택으로 동작합니다.';
         viewerTip.textContent = dragSelect
-          ? 'Drag = local face 박스 선택, Ctrl+Drag = add/remove, Shift+Drag = rotate, Wheel = zoom.'
-          : 'Drag = rotate, Wheel = zoom. 선택 모드에서만 Click 선택.';
+          ? 'Drag = local face 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
+          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll. 선택 모드에서만 Click 선택.';
         componentSelectBlock.classList.add('hidden-block');
         faceIndexBlock.classList.add('hidden-block');
         return;
@@ -3190,22 +3292,22 @@ def _build_html_form(material_options: str, version: str) -> str:
       if (mode === 'click') {{
         roiModeHint.textContent = '3D view에서 선택: 지금부터 3D viewer 클릭이 ROI 선택으로 동작합니다.';
         viewerTip.textContent = dragSelect
-          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Shift+Drag = rotate, Wheel = zoom.'
-          : 'Drag = rotate, Wheel = zoom. ROI 모드에서만 Click 선택.';
+          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
+          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll. ROI 모드에서만 Click 선택.';
         componentSelectBlock.classList.add('hidden-block');
         faceIndexBlock.classList.add('hidden-block');
       }} else if (mode === 'panel') {{
         roiModeHint.textContent = 'Component 선택: component 체크 또는 face index 입력으로 ROI를 선택합니다.';
         viewerTip.textContent = dragSelect
-          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Shift+Drag = rotate, Wheel = zoom.'
-          : 'Drag = rotate, Wheel = zoom, Camera preset = 정면/측면 보기 고정.';
+          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
+          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, Camera preset = 정면/측면 보기 고정.';
         componentSelectBlock.classList.remove('hidden-block');
         faceIndexBlock.classList.remove('hidden-block');
       }} else {{
         roiModeHint.textContent = 'ROI 선택 방식이 아직 정해지지 않았습니다. 현재 3D viewer 클릭은 하이라이트만 동작합니다.';
         viewerTip.textContent = dragSelect
-          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Shift+Drag = rotate, Wheel = zoom.'
-          : 'Drag = rotate, Wheel = zoom, Camera preset = 정면/측면 보기 고정.';
+          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
+          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, Camera preset = 정면/측면 보기 고정.';
         componentSelectBlock.classList.add('hidden-block');
         faceIndexBlock.classList.add('hidden-block');
       }}
@@ -3979,6 +4081,29 @@ def _build_html_form(material_options: str, version: str) -> str:
         }}
       }}
       setLocalGapFaces(Array.from(collected), additive);
+    }}
+
+    function handleViewerPickFace(faceIndex, mode, pickEvent) {{
+      const additive = !!(pickEvent && (pickEvent.ctrlKey || pickEvent.metaKey));
+      if (state.gapTargetMode === 'face_gap') {{
+        if (state.gapSelectionMethod === 'drag_box') {{
+          setInspectedFace(faceIndex);
+          return;
+        }}
+        setInspectedFace(faceIndex);
+        selectLocalGapCluster(faceIndex, additive);
+      }} else if (state.roiSelectionMode === 'click') {{
+        toggleClickedFace(faceIndex);
+      }} else {{
+        setInspectedFace(faceIndex);
+        if (state.gapTargetMode === 'component_move_gap') {{
+          if (state.gapSelectionMethod === 'drag_box') {{
+            return;
+          }}
+          const objectId = faceIndex === null || faceIndex === undefined ? null : state.faceToObjectId.get(faceIndex);
+          setSelectedGapObject(objectId, pickEvent || null, additive);
+        }}
+      }}
     }}
 
     function setSelectedGapObjects(objectIds, additive, popupPosition) {{
@@ -4993,25 +5118,7 @@ def _build_html_form(material_options: str, version: str) -> str:
         if (totalMove > 6) return;
         const canvas = mode === 'roi' ? roiCanvas : fullCanvas;
         const faceIndex = pickFaceFromCanvas(canvas, mode, ev.clientX, ev.clientY);
-        if (state.gapTargetMode === 'face_gap') {{
-          if (state.gapSelectionMethod === 'drag_box') {{
-            setInspectedFace(faceIndex);
-            return;
-          }}
-          setInspectedFace(faceIndex);
-          selectLocalGapCluster(faceIndex, !!(ev.ctrlKey || ev.metaKey));
-        }} else if (state.roiSelectionMode === 'click') {{
-          toggleClickedFace(faceIndex);
-        }} else {{
-          setInspectedFace(faceIndex);
-          if (state.gapTargetMode === 'component_move_gap') {{
-            if (state.gapSelectionMethod === 'drag_box') {{
-              return;
-            }}
-            const objectId = faceIndex === null || faceIndex === undefined ? null : state.faceToObjectId.get(faceIndex);
-            setSelectedGapObject(objectId, null, !!(ev.ctrlKey || ev.metaKey));
-          }}
-        }}
+        handleViewerPickFace(faceIndex, mode, ev);
       }}
 
       fullCanvas.addEventListener('click', function (ev) {{
@@ -5019,6 +5126,10 @@ def _build_html_form(material_options: str, version: str) -> str:
       }});
       roiCanvas.addEventListener('click', function (ev) {{
         handlePick(ev, 'roi');
+      }});
+      viewerWrap.addEventListener('leakage-three-pick', function (ev) {{
+        const detail = ev.detail || {{}};
+        handleViewerPickFace(detail.faceIndex, detail.mode || 'full', detail);
       }});
     }}
 

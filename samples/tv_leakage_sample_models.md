@@ -66,7 +66,7 @@
   - synthetic: `False`
   - faces: `116`
   - vertices: `64`
-  - objects/components: `3`
+  - objects/components: `4`
 - `tv_leakage_roi_left_bottom_no_gap.stp`
   - synthetic: `False`
   - faces: `88`

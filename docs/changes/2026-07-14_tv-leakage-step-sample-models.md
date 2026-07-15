@@ -49,7 +49,7 @@
   - synthetic: `False`
   - faces: `116`
   - vertices: `64`
-  - objects/components: `3`
+  - objects/components: `4`
 - 좌측 ROI 모델 import 성공
   - synthetic: `False`
   - faces: `88`

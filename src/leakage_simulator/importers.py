@@ -19,7 +19,7 @@ try:
     from OCP.BRepMesh import BRepMesh_IncrementalMesh
     from OCP.IFSelect import IFSelect_RetDone
     from OCP.STEPControl import STEPControl_Reader
-    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopLoc import TopLoc_Location
     from OCP.TopoDS import TopoDS
@@ -263,10 +263,10 @@ def _import_step_ocp(path: Path) -> ImportResult:
         global_vertex_map[key] = vertex_index
         return vertex_index
 
-    explorer = TopExp_Explorer(shape, TopAbs_FACE)
     face_counter = 0
-    while explorer.More():
-        face = TopoDS.Face_s(explorer.Current())
+
+    def import_face(face, component_index: int, component_name: str) -> None:
+        nonlocal face_counter
         location = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation_s(face, location)
         if triangulation is not None and triangulation.NbNodes() > 0 and triangulation.NbTriangles() > 0:
@@ -283,12 +283,36 @@ def _import_step_ocp(path: Path) -> ImportResult:
                     vertex_map[b],
                     vertex_map[c],
                     default_material,
-                    {"source": "step_ocp", "face_index": face_counter},
+                    {
+                        "source": "step_ocp",
+                        "face_index": face_counter,
+                        "step_component_id": component_index,
+                        "step_component_name": component_name,
+                    },
                 )
                 if face_id % 13 == 0:
                     receiver_faces.append(face_id)
         face_counter += 1
-        explorer.Next()
+
+    solid_explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    solid_counter = 0
+    while solid_explorer.More():
+        solid_counter += 1
+        solid = solid_explorer.Current()
+        component_name = "STEP Solid {}".format(solid_counter)
+        face_explorer = TopExp_Explorer(solid, TopAbs_FACE)
+        while face_explorer.More():
+            face = TopoDS.Face_s(face_explorer.Current())
+            import_face(face, solid_counter - 1, component_name)
+            face_explorer.Next()
+        solid_explorer.Next()
+
+    if solid_counter == 0:
+        explorer = TopExp_Explorer(shape, TopAbs_FACE)
+        while explorer.More():
+            face = TopoDS.Face_s(explorer.Current())
+            import_face(face, 0, "STEP Body")
+            explorer.Next()
 
     if not mesh.faces:
         fallback_mesh, fallback_emitters, fallback_receivers = generate_synthetic_leakage_scene()
