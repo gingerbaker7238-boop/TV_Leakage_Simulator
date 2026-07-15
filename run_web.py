@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.13"
+WEB_UI_VERSION = "0.7.14"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -1992,10 +1992,8 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.controls.rotateSpeed = 0.72;
         this.controls.zoomSpeed = 0.95;
         this.controls.panSpeed = 0.85;
-        this.controls.minPolarAngle = 0.0001;
-        this.controls.maxPolarAngle = Math.PI - 0.0001;
         this.controls.mouseButtons = {{
-          LEFT: THREE.MOUSE.ROTATE,
+          LEFT: null,
           MIDDLE: THREE.MOUSE.ROTATE,
           RIGHT: THREE.MOUSE.PAN
         }};
@@ -2019,6 +2017,7 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.raycaster = new THREE.Raycaster();
         this.pointer = new THREE.Vector2();
         this.pointerDown = null;
+        this.freeRotateDrag = {{ active: false, lastX: 0, lastY: 0 }};
         this.rollDrag = {{ active: false, lastX: 0 }};
         this.center = new THREE.Vector3(0, 0, 0);
         this.size = 1;
@@ -2052,15 +2051,32 @@ def _build_html_form(material_options: str, version: str) -> str:
           this.controls.enabled = false;
           this.renderer.domElement.setPointerCapture?.(ev.pointerId);
           ev.preventDefault();
+        }} else if (ev.button === 0) {{
+          this.freeRotateDrag.active = true;
+          this.freeRotateDrag.lastX = ev.clientX;
+          this.freeRotateDrag.lastY = ev.clientY;
+          this.controls.enabled = false;
+          this.renderer.domElement.setPointerCapture?.(ev.pointerId);
+          ev.preventDefault();
         }}
       }}
 
       handlePointerMove(ev) {{
-        if (!this.rollDrag.active) return;
-        const dx = ev.clientX - this.rollDrag.lastX;
-        this.rollDrag.lastX = ev.clientX;
-        this.rollCamera(dx * 0.012);
-        ev.preventDefault();
+        if (this.rollDrag.active) {{
+          const dx = ev.clientX - this.rollDrag.lastX;
+          this.rollDrag.lastX = ev.clientX;
+          this.rollCamera(dx * 0.012);
+          ev.preventDefault();
+          return;
+        }}
+        if (this.freeRotateDrag.active) {{
+          const dx = ev.clientX - this.freeRotateDrag.lastX;
+          const dy = ev.clientY - this.freeRotateDrag.lastY;
+          this.freeRotateDrag.lastX = ev.clientX;
+          this.freeRotateDrag.lastY = ev.clientY;
+          this.freeRotateCamera(dx, dy);
+          ev.preventDefault();
+        }}
       }}
 
       handlePointerUp(ev) {{
@@ -2089,8 +2105,9 @@ def _build_html_form(material_options: str, version: str) -> str:
       }}
 
       handlePointerCancel(ev) {{
-        if (this.rollDrag.active) {{
+        if (this.rollDrag.active || this.freeRotateDrag.active) {{
           this.rollDrag.active = false;
+          this.freeRotateDrag.active = false;
           this.controls.enabled = true;
           try {{
             this.renderer.domElement.releasePointerCapture?.(ev.pointerId);
@@ -2102,6 +2119,24 @@ def _build_html_form(material_options: str, version: str) -> str:
         const viewAxis = new THREE.Vector3().subVectors(this.camera.position, this.controls.target).normalize();
         this.camera.up.applyAxisAngle(viewAxis, -angleRad).normalize();
         this.camera.lookAt(this.controls.target);
+        this.controls.update();
+      }}
+
+      freeRotateCamera(dx, dy) {{
+        if (!dx && !dy) return;
+        const target = this.controls.target;
+        const offset = new THREE.Vector3().subVectors(this.camera.position, target);
+        const yawQuat = new THREE.Quaternion().setFromAxisAngle(this.camera.up.clone().normalize(), -dx * 0.008);
+        offset.applyQuaternion(yawQuat);
+        this.camera.updateMatrixWorld();
+        const rightAxis = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0).normalize();
+        if (rightAxis.lengthSq() > 1e-10) {{
+          const pitchQuat = new THREE.Quaternion().setFromAxisAngle(rightAxis, -dy * 0.008);
+          offset.applyQuaternion(pitchQuat);
+          this.camera.up.applyQuaternion(pitchQuat).normalize();
+        }}
+        this.camera.position.copy(target).add(offset);
+        this.camera.lookAt(target);
         this.controls.update();
       }}
 
@@ -4119,6 +4154,10 @@ def _build_html_form(material_options: str, version: str) -> str:
       const ordered = uniqueSorted(Array.from(next));
       state.selectedGapObjectIds = new Set(ordered);
       state.selectedGapObjectId = ordered.length ? ordered[0] : null;
+      if (state.selectedGapObjectId !== null && state.selectedGapObjectId !== undefined && popupPosition) {{
+        ensureTransformRuleForObject(state.selectedGapObjectId);
+        renderTransformRules();
+      }}
       syncComponentSelectionSummary();
       if (!ordered.length) {{
         hideMovePopup();
