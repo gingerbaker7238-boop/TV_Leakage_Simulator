@@ -64,13 +64,16 @@
 ## Import 검증 결과
 - `tv_leakage_full_assembled_no_gap.stp`
   - synthetic: `False`
-  - faces: `140`
-  - vertices: `218`
+  - faces: `116`
+  - vertices: `64`
+  - objects/components: `3`
 - `tv_leakage_roi_left_bottom_no_gap.stp`
   - synthetic: `False`
-  - faces: `102`
-  - vertices: `172`
+  - faces: `88`
+  - vertices: `51`
+  - objects/components: `4`
 - `tv_leakage_roi_right_bottom_no_gap.stp`
   - synthetic: `False`
-  - faces: `102`
-  - vertices: `172`
+  - faces: `88`
+  - vertices: `51`
+  - objects/components: `4`

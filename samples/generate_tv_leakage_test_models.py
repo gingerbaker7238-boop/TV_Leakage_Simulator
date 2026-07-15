@@ -106,7 +106,7 @@ def make_corner_roi(side: str) -> cq.Assembly:
 
 def export_model(assembly: cq.Assembly, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    assembly.save(str(path), exportType="STEP", mode="fused", write_pcurves=False)
+    assembly.save(str(path), exportType="STEP", mode="default", write_pcurves=False)
 
 
 def main() -> None:

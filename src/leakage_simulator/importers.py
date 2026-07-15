@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List
 
 from .geometry import TriangleMesh
 from .materials import default_material_library
@@ -252,6 +252,16 @@ def _import_step_ocp(path: Path) -> ImportResult:
     receiver_faces: List[int] = []
     material_library = default_material_library()
     default_material = material_library["black_pc_resin"].material_id
+    global_vertex_map: Dict[Tuple[int, int, int], int] = {}
+
+    def add_deduped_vertex(x: float, y: float, z: float) -> int:
+        key = (round(x * 1000000), round(y * 1000000), round(z * 1000000))
+        existing = global_vertex_map.get(key)
+        if existing is not None:
+            return existing
+        vertex_index = mesh.add_vertex((x, y, z))
+        global_vertex_map[key] = vertex_index
+        return vertex_index
 
     explorer = TopExp_Explorer(shape, TopAbs_FACE)
     face_counter = 0
@@ -264,7 +274,7 @@ def _import_step_ocp(path: Path) -> ImportResult:
             vertex_map = {}
             for node_index in range(1, triangulation.NbNodes() + 1):
                 point = triangulation.Node(node_index).Transformed(transform)
-                vertex_map[node_index] = mesh.add_vertex((point.X(), point.Y(), point.Z()))
+                vertex_map[node_index] = add_deduped_vertex(point.X(), point.Y(), point.Z())
 
             for tri_index in range(1, triangulation.NbTriangles() + 1):
                 a, b, c = triangulation.Triangle(tri_index).Get()

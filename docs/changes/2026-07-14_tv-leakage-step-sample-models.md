@@ -47,16 +47,19 @@
 결과:
 - 전체 모델 import 성공
   - synthetic: `False`
-  - faces: `140`
-  - vertices: `218`
+  - faces: `116`
+  - vertices: `64`
+  - objects/components: `3`
 - 좌측 ROI 모델 import 성공
   - synthetic: `False`
-  - faces: `102`
-  - vertices: `172`
+  - faces: `88`
+  - vertices: `51`
+  - objects/components: `4`
 - 우측 ROI 모델 import 성공
   - synthetic: `False`
-  - faces: `102`
-  - vertices: `172`
+  - faces: `88`
+  - vertices: `51`
+  - objects/components: `4`
 
 ## 다음 작업
 - Web UI에서 전체 모델을 import하여 ROI 선택 동작을 확인한다.

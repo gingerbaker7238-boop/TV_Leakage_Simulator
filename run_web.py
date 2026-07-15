@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.11"
+WEB_UI_VERSION = "0.7.12"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -1983,8 +1983,26 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.container.appendChild(this.renderer.domElement);
 
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+        this.controls.enabled = true;
+        this.controls.enableRotate = true;
+        this.controls.enableZoom = true;
+        this.controls.enablePan = true;
         this.controls.enableDamping = true;
         this.controls.dampingFactor = 0.08;
+        this.controls.rotateSpeed = 0.72;
+        this.controls.zoomSpeed = 0.95;
+        this.controls.panSpeed = 0.85;
+        this.controls.minPolarAngle = 0.0001;
+        this.controls.maxPolarAngle = Math.PI - 0.0001;
+        this.controls.mouseButtons = {{
+          LEFT: THREE.MOUSE.ROTATE,
+          MIDDLE: THREE.MOUSE.DOLLY,
+          RIGHT: THREE.MOUSE.PAN
+        }};
+        this.controls.touches = {{
+          ONE: THREE.TOUCH.ROTATE,
+          TWO: THREE.TOUCH.DOLLY_PAN
+        }};
 
         this.root = new THREE.Group();
         this.scene.add(this.root);
@@ -3320,30 +3338,64 @@ def _build_html_form(material_options: str, version: str) -> str:
     }}
 
     function getThreeHiddenTransformFaces() {{
-      if (state.gapTargetMode !== 'component_move_gap') return [];
       return uniqueSorted(Array.from(getCommittedTransformFaceSet()));
     }}
 
     function buildThreeTransformOverlays() {{
       const overlays = [];
       if (!state.mesh) return overlays;
-      if (state.gapTargetMode === 'component_move_gap') {{
-        for (const rule of state.transformRules) {{
-          if (!rule.enabled || rule.target_type !== 'component' || !transformRuleHasAppliedTransform(rule)) continue;
-          const object = state.objectsById.get(rule.object_id);
-          if (!object || !object.face_indices || !object.face_indices.length) continue;
+      for (const objectId of uniqueSorted(Array.from(state.selectedGapObjectIds))) {{
+        const object = state.objectsById.get(objectId);
+        if (!object || !object.face_indices || !object.face_indices.length) continue;
+        const rule = getTransformRuleByObjectId(objectId);
+        const hasApplied = rule && rule.enabled && transformRuleHasAppliedTransform(rule);
+        overlays.push({{
+          kind: 'selected_component_' + objectId,
+          faceIndices: object.face_indices,
+          pivot: computePivotForFaceIndices(object.face_indices),
+          move: hasApplied ? cloneVector(rule.move) : {{ x: 0, y: 0, z: 0 }},
+          tilt: hasApplied ? cloneVector(rule.tilt) : {{ x: 0, y: 0, z: 0 }},
+          color: objectId === state.selectedGapObjectId ? 0x38bdf8 : 0x60a5fa,
+          edgeColor: 0xe0f2fe,
+          opacity: objectId === state.selectedGapObjectId ? 0.30 : 0.22,
+          edgeOpacity: 0.90
+        }});
+      }}
+      if (state.selectedMaterialObjectId !== null && state.selectedMaterialObjectId !== undefined) {{
+        const object = state.objectsById.get(state.selectedMaterialObjectId);
+        if (object && object.face_indices && object.face_indices.length) {{
+          const rule = getTransformRuleByObjectId(state.selectedMaterialObjectId);
+          const hasApplied = rule && rule.enabled && transformRuleHasAppliedTransform(rule);
           overlays.push({{
-            kind: rule.rule_id === state.activeTransformRuleId ? 'applied_active' : 'applied',
+            kind: 'selected_material_' + state.selectedMaterialObjectId,
             faceIndices: object.face_indices,
             pivot: computePivotForFaceIndices(object.face_indices),
-            move: cloneVector(rule.move),
-            tilt: cloneVector(rule.tilt),
-            color: rule.rule_id === state.activeTransformRuleId ? 0xef4444 : 0xdc2626,
-            edgeColor: 0xfca5a5,
-            opacity: rule.rule_id === state.activeTransformRuleId ? 0.52 : 0.42,
-            edgeOpacity: 0.98
+            move: hasApplied ? cloneVector(rule.move) : {{ x: 0, y: 0, z: 0 }},
+            tilt: hasApplied ? cloneVector(rule.tilt) : {{ x: 0, y: 0, z: 0 }},
+            color: 0x2dd4bf,
+            edgeColor: 0x99f6e4,
+            opacity: 0.24,
+            edgeOpacity: 0.88
           }});
         }}
+      }}
+      for (const rule of state.transformRules) {{
+        if (!rule.enabled || rule.target_type !== 'component' || !transformRuleHasAppliedTransform(rule)) continue;
+        const object = state.objectsById.get(rule.object_id);
+        if (!object || !object.face_indices || !object.face_indices.length) continue;
+        overlays.push({{
+          kind: rule.rule_id === state.activeTransformRuleId ? 'applied_active' : 'applied',
+          faceIndices: object.face_indices,
+          pivot: computePivotForFaceIndices(object.face_indices),
+          move: cloneVector(rule.move),
+          tilt: cloneVector(rule.tilt),
+          color: rule.rule_id === state.activeTransformRuleId ? 0xef4444 : 0xdc2626,
+          edgeColor: 0xfca5a5,
+          opacity: rule.rule_id === state.activeTransformRuleId ? 0.52 : 0.42,
+          edgeOpacity: 0.98
+        }});
+      }}
+      if (state.gapTargetMode === 'component_move_gap') {{
         const rule = activeTransformRule();
         const object = rule ? state.objectsById.get(rule.object_id) : null;
         if (
@@ -3752,7 +3804,6 @@ def _build_html_form(material_options: str, version: str) -> str:
 
     function getCommittedTransformFaceSet() {{
       const committedFaces = new Set();
-      if (state.gapTargetMode !== 'component_move_gap') return committedFaces;
       for (const rule of state.transformRules) {{
         if (!rule.enabled || rule.target_type !== 'component' || !transformRuleHasAppliedTransform(rule)) continue;
         const object = state.objectsById.get(rule.object_id);
@@ -3765,7 +3816,7 @@ def _build_html_form(material_options: str, version: str) -> str:
     }}
 
     function drawCommittedTransforms(ctx, scene) {{
-      if (!scene || state.gapTargetMode !== 'component_move_gap') return;
+      if (!scene) return;
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
       for (const rule of state.transformRules) {{
