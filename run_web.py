@@ -21,7 +21,7 @@ from leakage_simulator.materials import default_material_library
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.7.14"
+WEB_UI_VERSION = "0.7.15"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 UPLOAD_DIR = ROOT / "_uploads"
 DEMO_CAD_PATH = ROOT / "samples" / "demo_tv_frame.obj"
@@ -368,6 +368,24 @@ def _build_html_form(material_options: str, version: str) -> str:
       font-size: 12px;
       font-weight: 700;
       color: #1e293b;
+      cursor: text;
+    }}
+    .component-row-main .name:hover {{
+      color: #2563eb;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }}
+    .component-name-input {{
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #60a5fa;
+      border-radius: 8px;
+      padding: 4px 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #0f172a;
+      background: #eff6ff;
+      outline: none;
     }}
     .component-row-main .meta {{
       margin-top: 2px;
@@ -2716,6 +2734,96 @@ def _build_html_form(material_options: str, version: str) -> str:
       return item.object_name + ' / faces: ' + item.face_count + ', area: ' + item.area_mm2 + ' mm2' + trunc;
     }}
 
+    function refreshComponentNameDom(objectId) {{
+      const item = state.objectsById.get(objectId);
+      if (!item) return;
+      const componentRow = gapObjectList ? gapObjectList.querySelector('[data-component-row-id=\"' + objectId + '\"]') : null;
+      if (componentRow) {{
+        const nameEl = componentRow.querySelector('[data-component-name]');
+        if (nameEl && nameEl.tagName !== 'INPUT') {{
+          nameEl.textContent = item.object_name;
+          nameEl.title = 'Double-click or press F2 to rename';
+        }}
+      }}
+      const roiRow = objectList ? objectList.querySelector('[data-roi-object-row-id=\"' + objectId + '\"]') : null;
+      if (roiRow) {{
+        const label = roiRow.querySelector('.roi-object-label');
+        if (label) label.textContent = objectLabel(item);
+      }}
+    }}
+
+    function renameComponentObject(objectId, nextName) {{
+      const item = state.objectsById.get(objectId);
+      if (!item) return false;
+      const trimmed = String(nextName ?? '').trim();
+      if (!trimmed) return false;
+      item.object_name = trimmed;
+      item.component_name = trimmed;
+      const rule = getTransformRuleByObjectId(objectId);
+      if (rule) rule.label = trimmed;
+      for (const assignment of state.materialAssignments) {{
+        if (assignment.target_type === 'part' && assignment.object_id === objectId) {{
+          assignment.target_name = trimmed;
+        }}
+      }}
+      refreshComponentNameDom(objectId);
+      syncComponentSelectionSummary();
+      renderTransformRules();
+      renderMaterialLibrary();
+      updateMaterialTargetSummary();
+      updateGapSelectionStats();
+      drawViewer();
+      return true;
+    }}
+
+    function beginRenameComponent(objectId) {{
+      const item = state.objectsById.get(objectId);
+      if (!item || !gapObjectList) return;
+      const row = gapObjectList.querySelector('[data-component-row-id=\"' + objectId + '\"]');
+      if (!row) return;
+      const nameEl = row.querySelector('[data-component-name]');
+      if (!nameEl || nameEl.tagName === 'INPUT') return;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'component-name-input';
+      input.value = item.object_name;
+      input.setAttribute('aria-label', 'Component name');
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+      let finished = false;
+      const finish = (save) => {{
+        if (finished) return;
+        finished = true;
+        const value = input.value;
+        const next = document.createElement('div');
+        next.className = 'name';
+        next.setAttribute('data-component-name', String(objectId));
+        next.setAttribute('tabindex', '0');
+        next.title = 'Double-click or press F2 to rename';
+        input.replaceWith(next);
+        if (save) {{
+          renameComponentObject(objectId, value);
+        }} else {{
+          refreshComponentNameDom(objectId);
+        }}
+      }};
+      input.addEventListener('keydown', function (ev) {{
+        if (ev.key === 'Enter') {{
+          ev.preventDefault();
+          ev.stopPropagation();
+          finish(true);
+        }} else if (ev.key === 'Escape') {{
+          ev.preventDefault();
+          ev.stopPropagation();
+          finish(false);
+        }}
+      }});
+      input.addEventListener('blur', function () {{
+        finish(true);
+      }});
+    }}
+
     function getTransformRuleById(ruleId) {{
       return state.transformRules.find(rule => rule.rule_id === ruleId) || null;
     }}
@@ -4813,7 +4921,9 @@ def _build_html_form(material_options: str, version: str) -> str:
             }}
             const row = document.createElement('div');
             row.className = 'object-item';
-            row.innerHTML = '<label><input type=\"checkbox\" data-id=\"' + item.object_id + '\"/> ' + objectLabel(item) + '</label>';
+            row.setAttribute('data-roi-object-row-id', String(item.object_id));
+            row.innerHTML = '<label><input type=\"checkbox\" data-id=\"' + item.object_id + '\"/> <span class=\"roi-object-label\"></span></label>';
+            row.querySelector('.roi-object-label').textContent = objectLabel(item);
             const cb = row.querySelector('input');
             cb.addEventListener('change', function (ev) {{
               const id = parseInt(ev.target.getAttribute('data-id'), 10);
@@ -4832,7 +4942,7 @@ def _build_html_form(material_options: str, version: str) -> str:
             gapRow.innerHTML =
               '<div class=\"component-tree-row\">'
               + '<div class=\"component-row-main\" data-component-select=\"' + item.object_id + '\">'
-              + '<div class=\"name\">' + item.object_name + '</div>'
+              + '<div class=\"name\" data-component-name=\"' + item.object_id + '\" tabindex=\"0\" title=\"Double-click or press F2 to rename\"></div>'
               + '<div class=\"meta\">faces: ' + item.face_count + ' / area: ' + item.area_mm2 + ' mm2</div>'
               + '</div>'
               + '<div class=\"component-row-actions\">'
@@ -4841,11 +4951,28 @@ def _build_html_form(material_options: str, version: str) -> str:
               + '</div>'
               + '</div>';
             const selectArea = gapRow.querySelector('[data-component-select]');
+            const nameEl = gapRow.querySelector('[data-component-name]');
             const transformBtn = gapRow.querySelector('[data-component-transform]');
             const materialBtn = gapRow.querySelector('[data-component-material]');
+            nameEl.textContent = item.object_name;
             selectArea.addEventListener('click', function (ev) {{
               const id = parseInt(ev.currentTarget.getAttribute('data-component-select'), 10);
               setSelectedGapObject(id, null, true);
+            }});
+            selectArea.addEventListener('dblclick', function (ev) {{
+              const nameTarget = ev.target.closest('[data-component-name]');
+              if (!nameTarget) return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              const id = parseInt(nameTarget.getAttribute('data-component-name'), 10);
+              beginRenameComponent(id);
+            }});
+            selectArea.addEventListener('keydown', function (ev) {{
+              if (ev.key !== 'F2') return;
+              ev.preventDefault();
+              ev.stopPropagation();
+              const id = parseInt(ev.currentTarget.getAttribute('data-component-select'), 10);
+              beginRenameComponent(id);
             }});
             transformBtn.addEventListener('click', function (ev) {{
               const id = parseInt(ev.currentTarget.getAttribute('data-component-transform'), 10);
@@ -5424,6 +5551,13 @@ def _build_html_form(material_options: str, version: str) -> str:
     }});
     emitterType.addEventListener('change', updateEmitterPanel);
     runForm.addEventListener('keydown', function (ev) {{
+      if (ev.key === 'F2') {{
+        if (state.selectedGapObjectId !== null && state.selectedGapObjectId !== undefined) {{
+          ev.preventDefault();
+          beginRenameComponent(state.selectedGapObjectId);
+        }}
+        return;
+      }}
       if (ev.key !== 'Enter') return;
       const target = ev.target;
       if (!target || target.tagName === 'TEXTAREA') return;
