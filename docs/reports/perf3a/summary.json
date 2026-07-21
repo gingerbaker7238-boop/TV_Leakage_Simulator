@@ -1,0 +1,31 @@
+{
+  "generated_at": "2026-07-21T15:22:25",
+  "platform": "Windows-10-10.0.19045-SP0",
+  "python_version": "3.13.3",
+  "ray_count": 1000000,
+  "rt2d_baseline_sec": 21.490163564682007,
+  "rt3_pre_perf3a_sec": 25.094383001327515,
+  "cases": {
+    "summary": {
+      "contribution_mode": "summary",
+      "runtime_sec": 23.189836263656616,
+      "wall_time_sec": 23.189877799999522,
+      "rays_per_sec": 43122.33983157577,
+      "execution_path": "single_bounce_fast",
+      "receiver_hit_count": 1000000,
+      "receiver_flux_lumen": 0.47837428901995965
+    },
+    "detailed": {
+      "contribution_mode": "detailed",
+      "runtime_sec": 24.520203828811646,
+      "wall_time_sec": 24.52024220000021,
+      "rays_per_sec": 40782.69524109679,
+      "execution_path": "single_bounce_fast",
+      "receiver_hit_count": 1000000,
+      "receiver_flux_lumen": 0.47837428901995965
+    }
+  },
+  "fast_slowdown_vs_rt2d_percent": 7.909072882851098,
+  "fast_improvement_vs_rt3_percent": 7.589534030663936,
+  "result_flux_delta_lumen": 0.0
+}

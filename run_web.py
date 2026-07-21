@@ -23,7 +23,7 @@ from leakage_simulator.raytracer import run_direct_ray_trace
 from leakage_simulator.roi import build_scene_payload
 from leakage_simulator.types import EmitterConfig, GapRule, RunConfig
 
-WEB_UI_VERSION = "0.9.10"
+WEB_UI_VERSION = "0.9.13"
 OUTPUT_FILE_INDEX: Dict[str, Path] = {}
 SCENE_MESH_CACHE: Dict[str, Dict] = {}
 UPLOAD_DIR = ROOT / "_uploads"
@@ -1974,14 +1974,19 @@ def _build_html_form(material_options: str, version: str) -> str:
             </details>
             <details class=\"panel-meta-details\">
               <summary>Advanced</summary>
-              <div class=\"rt-mode-note\"><b>RT-2C one-bounce reflection</b><br>최초 충돌 face의 optical profile을 조회한 뒤 Specular, Gaussian, Lambertian 방향으로 한 번 반사하고, 반사 후 CAD 차폐와 Receiver 도달을 다시 판정합니다.</div>
+              <div class=\"rt-mode-note\"><b>RT-3 multi-bounce reflection</b><br>각 충돌 face의 optical profile을 조회하고 설정한 최대 반사 횟수까지 Specular, Gaussian, Lambertian 반사를 반복합니다.</div>
               <div class=\"grid\">
+                <label>Max reflections<select id=\"rtMaxDepthInput\"><option value=\"0\">0 · Direct only</option><option value=\"1\">1</option><option value=\"2\" selected>2</option><option value=\"3\">3</option></select></label>
+                <label>Termination<select id=\"rtTerminationModeInput\"><option value=\"threshold\" selected>Energy threshold</option><option value=\"russian_roulette\">Russian roulette</option></select></label>
+                <label>Min ray power (lm)<input id=\"rtMinEnergyInput\" type=\"number\" min=\"0\" step=\"any\" value=\"1e-9\"></label>
+                <label>Result detail<select id=\"rtContributionModeInput\"><option value=\"summary\" selected>Fast summary</option><option value=\"detailed\">Detailed contribution</option></select></label>
                 <label>Seed<input id=\"rtSeedInput\" name=\"seed\" type=\"number\" value=\"42\"></label>
                 <label>Saved ray paths<input id=\"rtMaxPathsInput\" type=\"number\" min=\"0\" max=\"1000\" value=\"200\"></label>
                 <label>Brightness scale (k_abs)<input id=\"rtKAbsInput\" name=\"k_abs\" type=\"number\" step=\"0.01\" value=\"0.12\"></label>
                 <label>BRDF scale (k_brdf)<input id=\"rtKBrdfInput\" name=\"k_brdf\" type=\"number\" step=\"0.1\" value=\"1.0\"></label>
               </div>
               <label class=\"emitter-check\"><input id=\"rtStorePathsInput\" type=\"checkbox\" checked> Show hit ray paths in 3D viewer</label>
+              <div class=\"small\">Fast summary는 광학 결과를 유지하면서 부품·면·소재별 상세 기여도 집계를 생략합니다. Detailed contribution은 원인 분석용 전체 집계를 저장합니다.</div>
               <div class=\"small\">Ray 수는 각 Emitter properties의 Rays 값을 사용하며 전체 ray 수는 emitter별 값의 합입니다.</div>
             </details>
           </div>
@@ -3202,6 +3207,10 @@ def _build_html_form(material_options: str, version: str) -> str:
     const resultPanel = document.getElementById('resultPanel');
     const resultPlaceholder = document.getElementById('resultPlaceholder');
     const directRunHint = document.getElementById('directRunHint');
+    const rtMaxDepthInput = document.getElementById('rtMaxDepthInput');
+    const rtTerminationModeInput = document.getElementById('rtTerminationModeInput');
+    const rtMinEnergyInput = document.getElementById('rtMinEnergyInput');
+    const rtContributionModeInput = document.getElementById('rtContributionModeInput');
     const rtSeedInput = document.getElementById('rtSeedInput');
     const rtMaxPathsInput = document.getElementById('rtMaxPathsInput');
     const rtKAbsInput = document.getElementById('rtKAbsInput');
@@ -3554,6 +3563,7 @@ def _build_html_form(material_options: str, version: str) -> str:
       const hitCount = Math.max(0, Number(result.receiver_hit_count) || 0);
       const surfaceInteractionCount = Math.max(0, Number(result.surface_hit_count) || 0);
       const reflectionSummary = result.metrics?._reflection_summary || {{}};
+      const maxReflectionDepth = Math.max(0, Number(reflectionSummary.implemented_max_depth) || 0);
       const performanceSummary = result.metrics?._performance_summary || {{}};
       const intersectionBackend = String(performanceSummary.intersection_backend || 'brute_force');
       const primarySurfaceCount = Math.max(0, Number(reflectionSummary.primary_surface_hit_count) || 0);
@@ -3576,7 +3586,7 @@ def _build_html_form(material_options: str, version: str) -> str:
           + '<div>Lit area<b>' + formatRayMetric(metrics.area_above_zero_mm2) + ' mm²</b></div>'
           + '</div>'
           + (grid ? '<canvas class="rt-heatmap" data-receiver-heatmap="' + escapeHtml(receiver.receiver_id) + '"></canvas>' : '')
-          + '<div class="rt-result-note">Heatmap은 Receiver grid에 누적된 direct + 1회 반사 flux의 상대 분포입니다.</div>'
+          + '<div class="rt-result-note">Heatmap은 Receiver grid에 누적된 direct + 최대 ' + maxReflectionDepth + '회 반사 flux의 상대 분포입니다.</div>'
           + '</div>';
       }}
       const pathCount = Array.isArray(result.stored_paths) ? result.stored_paths.length : 0;
@@ -3601,11 +3611,11 @@ def _build_html_form(material_options: str, version: str) -> str:
           + ' / diffuse: ' + Number(item.diffuse_ratio || 0).toFixed(2)
           + '\\npotential reflected flux: ' + formatRayMetric(item.potential_reflected_flux_lumen) + ' lm</div></div>'
         ).join('')
-        + '<div class="rt-result-note">Potential reflected flux는 R × 입사 flux이며 RT-2C 반사 ray의 시작 광량으로 사용됩니다.</div>'
+        + '<div class="rt-result-note">Potential reflected flux는 R × 입사 flux이며 다음 bounce ray의 시작 광량으로 사용됩니다.</div>'
         + '</div>';
       const reflectionLobes = reflectionSummary.lobes || {{}};
       const reflectionHtml = '<div class="rt-receiver-result">'
-        + '<div class="rt-receiver-title">One-bounce reflection</div>'
+        + '<div class="rt-receiver-title">Multi-bounce reflection · max depth ' + maxReflectionDepth + '</div>'
         + '<div class="rt-metric-row">'
         + '<div>Emitted<b>' + Math.round(Number(reflectionSummary.reflection_emitted_count) || 0).toLocaleString() + '</b></div>'
         + '<div>Receiver hits<b>' + Math.round(Number(reflectionSummary.reflection_receiver_hit_count) || 0).toLocaleString() + '</b></div>'
@@ -3624,6 +3634,7 @@ def _build_html_form(material_options: str, version: str) -> str:
             + '\\nemitted flux: ' + formatRayMetric(item.emitted_flux_lumen) + ' lm'
             + ' / received: ' + formatRayMetric(item.receiver_flux_lumen) + ' lm'
             + '\\nblocked: ' + Math.round(Number(item.blocked_count) || 0).toLocaleString()
+            + ' / continued: ' + Math.round(Number(item.continued_count) || 0).toLocaleString()
             + ' / escaped: ' + Math.round(Number(item.escaped_count) || 0).toLocaleString()
             + '</div></div>';
         }}).join('')
@@ -3639,7 +3650,7 @@ def _build_html_form(material_options: str, version: str) -> str:
         + '<div class="rt-result-kpi"><span>Ray rate</span><strong>' + Math.round(Number(performanceSummary.rays_per_sec) || 0).toLocaleString() + ' /s</strong></div>'
         + '<div class="rt-result-kpi"><span>CAD intersection</span><strong>' + escapeHtml(intersectionBackend.toUpperCase()) + '</strong></div>'
         + '</div>'
-        + '<div class="rt-result-note">RT-2C · PERF-2 CAD intersection · '
+        + '<div class="rt-result-note">RT-3 multi-bounce · PERF-2 CAD intersection · '
         + escapeHtml(intersectionBackend.toUpperCase())
         + ' · BVH build ' + (Number(performanceSummary.bvh_build_sec) || 0).toFixed(3)
         + ' s · 3D path ' + pathCount + '개 표시</div>'
@@ -3661,7 +3672,7 @@ def _build_html_form(material_options: str, version: str) -> str:
       if (runBtn.disabled || state.rayTraceRunning) return;
       state.rayTraceRunning = true;
       updateRayTraceRunState();
-      setResultMessage('<div>Direct + one-bounce ray tracing 실행 중…</div>', {{ openResult: true }});
+      setResultMessage('<div>Direct + multi-bounce ray tracing 실행 중…</div>', {{ openResult: true }});
       try {{
         const totalRayCount = state.emitters
           .filter((item) => item.enabled !== false)
@@ -3677,13 +3688,14 @@ def _build_html_form(material_options: str, version: str) -> str:
           transform_rules: state.transformRules.filter((rule) => rule.enabled !== false),
           config: {{
             ray_count: Math.max(1, totalRayCount),
-            max_depth: 1,
+            max_depth: Math.max(0, Math.min(3, parseInt(rtMaxDepthInput.value, 10) || 0)),
             seed: parseInt(rtSeedInput.value, 10) || 42,
-            min_energy: 1e-9,
+            min_energy: Math.max(0, Number(rtMinEnergyInput.value) || 0),
             epsilon_mm: 1e-4,
             k_abs: Math.max(0, Number(rtKAbsInput.value) || 0),
             k_brdf: Math.max(0, Number(rtKBrdfInput.value) || 0),
-            termination_mode: 'threshold',
+            termination_mode: rtTerminationModeInput.value === 'russian_roulette' ? 'russian_roulette' : 'threshold',
+            contribution_mode: rtContributionModeInput.value === 'detailed' ? 'detailed' : 'summary',
             store_ray_paths: !!rtStorePathsInput.checked,
             max_stored_paths: Math.max(0, Math.min(1000, parseInt(rtMaxPathsInput.value, 10) || 0))
           }}

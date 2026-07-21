@@ -90,6 +90,7 @@ RECEIVER_PLACEMENT_MODES = ("datum_plane", "reference_plane", "current_view")
 SCATTER_MODELS = ("none", "specular", "lambertian", "gaussian", "mixed")
 OPTICAL_ASSIGNMENT_TARGET_TYPES = ("part", "faces")
 TERMINATION_MODES = ("threshold", "russian_roulette")
+CONTRIBUTION_MODES = ("summary", "detailed")
 INTERSECTION_BACKENDS = ("auto", "brute_force", "bvh")
 
 
@@ -458,6 +459,7 @@ class RayTraceConfig:
     k_abs: float = 0.12
     k_brdf: float = 1.0
     termination_mode: str = "threshold"
+    contribution_mode: str = "summary"
     intersection_backend: str = "auto"
     store_ray_paths: bool = False
     max_stored_paths: int = 500
@@ -473,6 +475,11 @@ class RayTraceConfig:
         self.k_abs = require_non_negative(self.k_abs, "k_abs")
         self.k_brdf = require_non_negative(self.k_brdf, "k_brdf")
         self.termination_mode = require_choice(self.termination_mode, "termination_mode", TERMINATION_MODES)
+        self.contribution_mode = require_choice(
+            self.contribution_mode,
+            "contribution_mode",
+            CONTRIBUTION_MODES,
+        )
         self.intersection_backend = require_choice(
             self.intersection_backend,
             "intersection_backend",
@@ -575,6 +582,38 @@ class ReceiverGrid:
 
 
 @dataclass
+class RayTraceContributionSummary:
+    schema_version: str = "rt-contribution.v1"
+    direct_receiver_hit_count: int = 0
+    direct_receiver_flux_lumen: float = 0.0
+    reflected_receiver_hit_count: int = 0
+    reflected_receiver_flux_lumen: float = 0.0
+    receivers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    components: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    faces: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    materials: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    lobes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    depths: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.direct_receiver_hit_count = int(self.direct_receiver_hit_count)
+        self.reflected_receiver_hit_count = int(self.reflected_receiver_hit_count)
+        if self.direct_receiver_hit_count < 0 or self.reflected_receiver_hit_count < 0:
+            raise ValueError("receiver contribution hit counts must be non-negative")
+        self.direct_receiver_flux_lumen = require_non_negative(
+            self.direct_receiver_flux_lumen,
+            "direct_receiver_flux_lumen",
+        )
+        self.reflected_receiver_flux_lumen = require_non_negative(
+            self.reflected_receiver_flux_lumen,
+            "reflected_receiver_flux_lumen",
+        )
+
+    def to_dict(self) -> Dict:
+        return asdict(self)
+
+
+@dataclass
 class RayTraceResult:
     run_id: str
     config: RayTraceConfig
@@ -586,6 +625,7 @@ class RayTraceResult:
     receiver_hit_count: int
     surface_hit_count: int
     terminated_ray_count: int
+    contribution_summary: RayTraceContributionSummary
     runtime_sec: float = 0.0
     stored_paths: List[List[RayHit]] = field(default_factory=list)
     metrics: Dict[str, Any] = field(default_factory=dict)

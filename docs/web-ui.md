@@ -54,6 +54,14 @@
   - ray path overlay
   - before/after compare 고도화
 
+## Ray Tracing
+- Web UI `v0.9.12`부터 RT-3 다회 반사를 지원한다.
+- Advanced에서 최대 반사 횟수 `0~3`, 최소 ray power, threshold/Russian roulette 종료 방식을 설정한다.
+- Receiver heatmap은 direct와 설정된 최대 depth까지의 반사 flux를 합산한다.
+- 3D ray path는 surface와 Receiver event의 bounce depth를 유지한다.
+- Web UI `v0.9.13`부터 `Fast summary`와 `Detailed contribution` 결과 모드를 선택한다.
+- 일반 반복 계산은 Fast summary, 부품·면·소재별 원인 분석은 Detailed contribution을 사용한다.
+
 ## Three.js 전환
 - 3D viewer는 `docs/viewer-data-contract.md`의 `mesh-scene.v1`을 기준으로 단계 전환한다.
 - 세부 전환 계획은 `docs/threejs-viewer-migration.md`를 따른다.

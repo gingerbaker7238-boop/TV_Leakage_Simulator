@@ -19,7 +19,7 @@ from .geometry import (
     clamp01,
 )
 from .types import EmitterConfig, GapRule, MaterialProfile, ReceiverMetrics, RunConfig, ReceiverPatchConfig, Vec3, fresh_run_id
-from .types import EmitterSpec, OpticalAssignment, OpticalProfile, RayHit, RayTraceConfig, RayTraceResult, ReceiverGrid, ReceiverSpec
+from .types import EmitterSpec, OpticalAssignment, OpticalProfile, RayHit, RayTraceConfig, RayTraceContributionSummary, RayTraceResult, ReceiverGrid, ReceiverSpec
 from .types import SimulationOutput, RunResultSummary, random_unit_vector
 from .gap import GapSample, sample_gap_profiles
 from .optics import OpticalPropertyResolver, UNASSIGNED_PROFILE_ID
@@ -208,6 +208,18 @@ def run_direct_ray_trace(trace_input: DirectRayTraceInput) -> RayTraceResult:
         "profile_hits": {},
     }
     reflection_summary = _empty_reflection_summary(trace_input.config)
+    contribution_summary = _empty_contribution_summary(trace_input.receivers)
+    detailed_contributions = trace_input.config.contribution_mode == "detailed"
+    face_contribution_cache: List[Optional[Dict]] = (
+        [None for _ in trace_input.mesh.faces]
+        if detailed_contributions
+        else []
+    )
+    execution_path = (
+        "single_bounce_fast"
+        if trace_input.config.max_depth <= 1
+        else "multi_bounce"
+    )
 
     for emitter in trace_input.emitters:
         if not emitter.enabled:
@@ -254,168 +266,290 @@ def run_direct_ray_trace(trace_input: DirectRayTraceInput) -> RayTraceResult:
                 if store_path
                 else None
             )
-            receiver_candidate = _find_first_receiver_hit(
-                origin=origin,
-                direction=direction,
-                power_lumen=ray_power,
-                source_face=source_face,
-                receivers=receiver_frames,
-                grids=receiver_grids,
-                config=trace_input.config,
-            )
-            receiver_distance = (
-                receiver_candidate.distance_mm
-                if receiver_candidate is not None
-                else None
-            )
-            surface_hit = trace_input.mesh.intersect_ray(
-                origin,
-                direction,
-                ignore_face=source_face if source_face >= 0 else None,
-                min_t=trace_input.config.epsilon_mm,
-                max_t=receiver_distance,
-            )
-            if surface_hit is not None:
+            current_origin = origin
+            current_direction = direction
+            current_power = ray_power
+            current_source_face = source_face
+            current_depth = 0
+            current_ray_kind = "direct"
+            previous_surface_contribution: Optional[Dict] = None
+            previous_lobe: Optional[str] = None
+            path_events: List[RayHit] = [emitter_event] if emitter_event is not None else []
+
+            if trace_input.config.max_depth <= 1:
+                fast_receiver_hits, fast_surface_hits, fast_terminated = _trace_single_bounce_fast(
+                    trace_input.mesh,
+                    origin,
+                    direction,
+                    ray_power,
+                    source_face,
+                    receiver_frames,
+                    receiver_grids,
+                    trace_input.config,
+                    resolved_optical_by_face,
+                    emitter_rng,
+                    optical_summary,
+                    reflection_summary,
+                    contribution_summary,
+                    face_contribution_cache,
+                    detailed_contributions,
+                    store_path,
+                    path_events,
+                    stored_paths,
+                )
+                receiver_hit_count += fast_receiver_hits
+                surface_hit_count += fast_surface_hits
+                terminated_ray_count += fast_terminated
+                continue
+
+            while True:
+                reflection_summary["max_observed_depth"] = max(
+                    reflection_summary["max_observed_depth"],
+                    current_depth,
+                )
+                receiver_candidate = _find_first_receiver_hit(
+                    origin=current_origin,
+                    direction=current_direction,
+                    power_lumen=current_power,
+                    source_face=current_source_face,
+                    receivers=receiver_frames,
+                    grids=receiver_grids,
+                    config=trace_input.config,
+                    depth=current_depth,
+                    ray_kind=current_ray_kind,
+                )
+                receiver_distance = (
+                    receiver_candidate.distance_mm
+                    if receiver_candidate is not None
+                    else None
+                )
+                surface_hit = trace_input.mesh.intersect_ray(
+                    current_origin,
+                    current_direction,
+                    ignore_face=current_source_face if current_source_face >= 0 else None,
+                    min_t=trace_input.config.epsilon_mm,
+                    max_t=receiver_distance,
+                )
+
+                if surface_hit is None:
+                    if receiver_candidate is not None:
+                        _record_receiver_hit(receiver_candidate)
+                        receiver_hit_count += 1
+                        if current_depth == 0:
+                            reflection_summary["direct_receiver_hit_count"] += 1
+                            reflection_summary["direct_receiver_flux_lumen"] += receiver_candidate.received_power_lumen
+                            _record_direct_receiver_contribution(
+                                contribution_summary,
+                                receiver_candidate,
+                            )
+                        else:
+                            _record_reflection_outcome(
+                                reflection_summary,
+                                previous_lobe,
+                                "receiver",
+                                current_depth,
+                                receiver_candidate.received_power_lumen,
+                            )
+                            _record_reflected_receiver_contribution(
+                                contribution_summary,
+                                receiver_candidate,
+                                previous_lobe,
+                                current_depth,
+                            )
+                            _record_surface_reflection_outcome(
+                                contribution_summary,
+                                previous_surface_contribution,
+                                previous_lobe,
+                                "receiver",
+                                current_power,
+                                current_depth,
+                                received_flux_lumen=receiver_candidate.received_power_lumen,
+                            )
+                        if store_path:
+                            path_events.append(receiver_candidate.to_ray_hit())
+                            stored_paths.append(path_events)
+                    else:
+                        terminated_ray_count += 1
+                        if current_depth > 0:
+                            _record_reflection_outcome(
+                                reflection_summary,
+                                previous_lobe,
+                                "escaped",
+                                current_depth,
+                            )
+                            _record_surface_reflection_outcome(
+                                contribution_summary,
+                                previous_surface_contribution,
+                                previous_lobe,
+                                "escaped",
+                                current_power,
+                                current_depth,
+                            )
+                        if store_path:
+                            stored_paths.append(path_events)
+                    break
+
                 surface_hit_count += 1
                 resolved_optical = resolved_optical_by_face[surface_hit.face_index]
-                reflected_power = ray_power * resolved_optical.profile.reflectance
-                reflection_summary["primary_surface_hit_count"] += 1
+                reflected_power = current_power * resolved_optical.profile.reflectance
+                surface_contribution = (
+                    _surface_contribution_for_face(
+                        contribution_summary,
+                        trace_input.mesh,
+                        surface_hit.face_index,
+                        face_contribution_cache,
+                    )
+                    if detailed_contributions
+                    else None
+                )
+                if current_depth == 0:
+                    reflection_summary["primary_surface_hit_count"] += 1
+                reflection_summary["surface_hit_count"] += 1
+                reflection_summary["max_observed_depth"] = max(
+                    reflection_summary["max_observed_depth"],
+                    current_depth,
+                )
+                if detailed_contributions:
+                    _record_surface_hit_contribution(
+                        contribution_summary,
+                        surface_contribution,
+                        current_depth,
+                        current_power,
+                        reflected_power,
+                    )
                 _record_optical_summary(
                     optical_summary,
                     resolved_optical.profile,
                     resolved_optical.source,
-                    ray_power,
+                    current_power,
                     reflected_power,
                 )
-                reflection_sample = _prepare_reflection_sample(
+                reflection_emission = _prepare_reflection_emission(
                     emitter_rng,
-                    direction,
+                    current_direction,
                     surface_hit.normal,
                     reflected_power,
                     resolved_optical.profile,
                     trace_input.config,
                     reflection_summary,
+                    current_depth,
                 )
-                path_events: List[RayHit] = []
-                if store_path and emitter_event is not None:
-                    path_events = [
-                        emitter_event,
+
+                if reflection_emission is None:
+                    if current_depth > 0:
+                        _record_reflection_outcome(
+                            reflection_summary,
+                            previous_lobe,
+                            "blocked",
+                            current_depth,
+                        )
+                        _record_surface_reflection_outcome(
+                            contribution_summary,
+                            previous_surface_contribution,
+                            previous_lobe,
+                            "blocked",
+                            current_power,
+                            current_depth,
+                        )
+                        if detailed_contributions:
+                            _record_secondary_blocker_contribution(
+                                contribution_summary,
+                                surface_contribution,
+                                previous_lobe,
+                                current_power,
+                                current_depth,
+                            )
+                    terminated_ray_count += 1
+                    if store_path:
+                        path_events.append(
+                            _surface_ray_hit(
+                                trace_input.mesh,
+                                surface_hit.face_index,
+                                surface_hit.point,
+                                surface_hit.normal,
+                                surface_hit.t,
+                                current_power,
+                                reflected_power,
+                                depth=current_depth,
+                                optical_profile=resolved_optical.profile,
+                                optical_source=resolved_optical.source,
+                                ray_kind=current_ray_kind if current_depth > 0 else None,
+                            )
+                        )
+                        stored_paths.append(path_events)
+                    break
+
+                reflection_sample, emitted_power = reflection_emission
+                next_depth = current_depth + 1
+                if current_depth > 0:
+                    _record_reflection_outcome(
+                        reflection_summary,
+                        previous_lobe,
+                        "continued",
+                        current_depth,
+                    )
+                    _record_surface_reflection_outcome(
+                        contribution_summary,
+                        previous_surface_contribution,
+                        previous_lobe,
+                        "continued",
+                        current_power,
+                        current_depth,
+                    )
+                _record_reflection_emission(
+                    reflection_summary,
+                    reflection_sample,
+                    emitted_power,
+                    next_depth,
+                )
+                _record_surface_reflection_emission(
+                    contribution_summary,
+                    surface_contribution,
+                    reflection_sample.lobe,
+                    emitted_power,
+                    next_depth,
+                )
+                if store_path:
+                    path_events.append(
                         _surface_ray_hit(
                             trace_input.mesh,
                             surface_hit.face_index,
                             surface_hit.point,
                             surface_hit.normal,
                             surface_hit.t,
-                            ray_power,
-                            reflected_power,
-                            depth=0,
+                            current_power,
+                            emitted_power,
+                            depth=current_depth,
                             optical_profile=resolved_optical.profile,
                             optical_source=resolved_optical.source,
-                            ray_kind=reflection_sample.lobe if reflection_sample is not None else None,
-                        ),
-                    ]
-                if reflection_sample is None:
-                    terminated_ray_count += 1
-                    if store_path:
-                        stored_paths.append(path_events)
-                    continue
-
-                _record_reflection_emission(
-                    reflection_summary,
-                    reflection_sample,
-                    reflected_power,
-                )
-                reflected_origin = vec_add(
-                    surface_hit.point,
-                    vec_mul(surface_hit.normal, trace_input.config.epsilon_mm),
-                )
-                reflected_receiver = _find_first_receiver_hit(
-                    origin=reflected_origin,
-                    direction=reflection_sample.direction,
-                    power_lumen=reflected_power,
-                    source_face=surface_hit.face_index,
-                    receivers=receiver_frames,
-                    grids=receiver_grids,
-                    config=trace_input.config,
-                    depth=1,
-                    ray_kind=reflection_sample.lobe,
-                )
-                reflected_receiver_distance = (
-                    reflected_receiver.distance_mm
-                    if reflected_receiver is not None
-                    else None
-                )
-                secondary_surface_hit = trace_input.mesh.intersect_ray(
-                    reflected_origin,
-                    reflection_sample.direction,
-                    ignore_face=surface_hit.face_index,
-                    min_t=trace_input.config.epsilon_mm,
-                    max_t=reflected_receiver_distance,
-                )
-                if secondary_surface_hit is not None:
-                    surface_hit_count += 1
-                    terminated_ray_count += 1
-                    _record_reflection_outcome(
-                        reflection_summary,
-                        reflection_sample.lobe,
-                        "blocked",
-                    )
-                    if store_path:
-                        path_events.append(
-                            _surface_ray_hit(
-                                trace_input.mesh,
-                                secondary_surface_hit.face_index,
-                                secondary_surface_hit.point,
-                                secondary_surface_hit.normal,
-                                secondary_surface_hit.t,
-                                reflected_power,
-                                0.0,
-                                depth=1,
-                                ray_kind=reflection_sample.lobe,
-                            )
+                            ray_kind=reflection_sample.lobe,
                         )
-                        stored_paths.append(path_events)
-                    continue
-                if reflected_receiver is not None:
-                    _record_receiver_hit(reflected_receiver)
-                    receiver_hit_count += 1
-                    _record_reflection_outcome(
-                        reflection_summary,
-                        reflection_sample.lobe,
-                        "receiver",
-                        reflected_receiver.received_power_lumen,
                     )
-                    if store_path:
-                        path_events.append(reflected_receiver.to_ray_hit())
-                        stored_paths.append(path_events)
-                    continue
-                terminated_ray_count += 1
-                _record_reflection_outcome(
-                    reflection_summary,
-                    reflection_sample.lobe,
-                    "escaped",
-                )
-                if store_path:
-                    stored_paths.append(path_events)
-                continue
-            if receiver_candidate is None:
-                terminated_ray_count += 1
-                continue
-            _record_receiver_hit(receiver_candidate)
-            receiver_hit_count += 1
-            reflection_summary["direct_receiver_hit_count"] += 1
-            reflection_summary["direct_receiver_flux_lumen"] += receiver_candidate.received_power_lumen
-            if store_path and emitter_event is not None:
-                stored_paths.append([emitter_event, receiver_candidate.to_ray_hit()])
 
+                previous_surface_contribution = surface_contribution
+                previous_lobe = reflection_sample.lobe
+                current_origin = vec_add(
+                    surface_hit.point,
+                    vec_mul(reflection_sample.direction, trace_input.config.epsilon_mm),
+                )
+                current_direction = reflection_sample.direction
+                current_power = emitted_power
+                current_source_face = surface_hit.face_index
+                current_depth = next_depth
+                current_ray_kind = reflection_sample.lobe
+
+    _finalize_surface_contributions(contribution_summary)
     grids = [receiver_grids[receiver.receiver_id] for receiver in trace_input.receivers if receiver.enabled]
     metrics = _build_direct_metrics(grids, trace_input.config)
     metrics["_optical_summary"] = optical_summary
     metrics["_reflection_summary"] = reflection_summary
+    metrics["_contribution_summary"] = contribution_summary.to_dict()
     runtime_sec = time.time() - start_time
     acceleration_info = trace_input.mesh.acceleration_info()
     metrics["_performance_summary"] = {
         "backend": "python_numpy_cpu",
+        "execution_path": execution_path,
+        "contribution_mode": trace_input.config.contribution_mode,
         "intersection_backend": acceleration_info["selected_backend"],
         "configured_intersection_backend": acceleration_info["configured_backend"],
         "bvh_node_count": acceleration_info["bvh_node_count"],
@@ -428,7 +562,7 @@ def run_direct_ray_trace(trace_input: DirectRayTraceInput) -> RayTraceResult:
         "rays_per_sec": total_rays / runtime_sec if runtime_sec > 0.0 else 0.0,
     }
     return RayTraceResult(
-        run_id=fresh_run_id("rt2c"),
+        run_id=fresh_run_id("rt3"),
         config=trace_input.config,
         emitters=trace_input.emitters,
         receivers=trace_input.receivers,
@@ -438,10 +572,318 @@ def run_direct_ray_trace(trace_input: DirectRayTraceInput) -> RayTraceResult:
         receiver_hit_count=receiver_hit_count,
         surface_hit_count=surface_hit_count,
         terminated_ray_count=terminated_ray_count,
+        contribution_summary=contribution_summary,
         runtime_sec=runtime_sec,
         stored_paths=stored_paths,
         metrics=metrics,
     )
+
+
+def _trace_single_bounce_fast(
+    mesh: TriangleMesh,
+    origin: Vec3,
+    direction: Vec3,
+    ray_power: float,
+    source_face: int,
+    receivers: List[ReceiverFrame],
+    receiver_grids: Dict[str, ReceiverGrid],
+    config: RayTraceConfig,
+    resolved_optical_by_face: List,
+    rng: random.Random,
+    optical_summary: Dict,
+    reflection_summary: Dict,
+    contribution_summary: RayTraceContributionSummary,
+    face_contribution_cache: List[Optional[Dict]],
+    detailed_contributions: bool,
+    store_path: bool,
+    path_events: List[RayHit],
+    stored_paths: List[List[RayHit]],
+) -> Tuple[int, int, int]:
+    receiver_candidate = _find_first_receiver_hit(
+        origin=origin,
+        direction=direction,
+        power_lumen=ray_power,
+        source_face=source_face,
+        receivers=receivers,
+        grids=receiver_grids,
+        config=config,
+        depth=0,
+        ray_kind="direct",
+    )
+    receiver_distance = (
+        receiver_candidate.distance_mm
+        if receiver_candidate is not None
+        else None
+    )
+    surface_hit = mesh.intersect_ray(
+        origin,
+        direction,
+        ignore_face=source_face if source_face >= 0 else None,
+        min_t=config.epsilon_mm,
+        max_t=receiver_distance,
+    )
+
+    if surface_hit is None:
+        if receiver_candidate is None:
+            if store_path:
+                stored_paths.append(path_events)
+            return 0, 0, 1
+        _record_receiver_hit(receiver_candidate)
+        reflection_summary["direct_receiver_hit_count"] += 1
+        reflection_summary["direct_receiver_flux_lumen"] += receiver_candidate.received_power_lumen
+        _record_direct_receiver_contribution(
+            contribution_summary,
+            receiver_candidate,
+        )
+        if store_path:
+            path_events.append(receiver_candidate.to_ray_hit())
+            stored_paths.append(path_events)
+        return 1, 0, 0
+
+    reflection_summary["surface_hit_count"] += 1
+    reflection_summary["primary_surface_hit_count"] += 1
+    resolved_optical = resolved_optical_by_face[surface_hit.face_index]
+    reflected_power = ray_power * resolved_optical.profile.reflectance
+    surface_contribution = (
+        _surface_contribution_for_face(
+            contribution_summary,
+            mesh,
+            surface_hit.face_index,
+            face_contribution_cache,
+        )
+        if detailed_contributions
+        else None
+    )
+    if detailed_contributions:
+        _record_surface_hit_contribution(
+            contribution_summary,
+            surface_contribution,
+            0,
+            ray_power,
+            reflected_power,
+        )
+    _record_optical_summary(
+        optical_summary,
+        resolved_optical.profile,
+        resolved_optical.source,
+        ray_power,
+        reflected_power,
+    )
+    reflection_emission = _prepare_reflection_emission(
+        rng,
+        direction,
+        surface_hit.normal,
+        reflected_power,
+        resolved_optical.profile,
+        config,
+        reflection_summary,
+        0,
+    )
+    if reflection_emission is None:
+        if store_path:
+            path_events.append(
+                _surface_ray_hit(
+                    mesh,
+                    surface_hit.face_index,
+                    surface_hit.point,
+                    surface_hit.normal,
+                    surface_hit.t,
+                    ray_power,
+                    reflected_power,
+                    depth=0,
+                    optical_profile=resolved_optical.profile,
+                    optical_source=resolved_optical.source,
+                )
+            )
+            stored_paths.append(path_events)
+        return 0, 1, 1
+
+    reflection_sample, emitted_power = reflection_emission
+    _record_reflection_emission(
+        reflection_summary,
+        reflection_sample,
+        emitted_power,
+        1,
+    )
+    _record_surface_reflection_emission(
+        contribution_summary,
+        surface_contribution,
+        reflection_sample.lobe,
+        emitted_power,
+        1,
+    )
+    if store_path:
+        path_events.append(
+            _surface_ray_hit(
+                mesh,
+                surface_hit.face_index,
+                surface_hit.point,
+                surface_hit.normal,
+                surface_hit.t,
+                ray_power,
+                emitted_power,
+                depth=0,
+                optical_profile=resolved_optical.profile,
+                optical_source=resolved_optical.source,
+                ray_kind=reflection_sample.lobe,
+            )
+        )
+
+    reflected_origin = vec_add(
+        surface_hit.point,
+        vec_mul(reflection_sample.direction, config.epsilon_mm),
+    )
+    reflected_receiver = _find_first_receiver_hit(
+        origin=reflected_origin,
+        direction=reflection_sample.direction,
+        power_lumen=emitted_power,
+        source_face=surface_hit.face_index,
+        receivers=receivers,
+        grids=receiver_grids,
+        config=config,
+        depth=1,
+        ray_kind=reflection_sample.lobe,
+    )
+    reflected_receiver_distance = (
+        reflected_receiver.distance_mm
+        if reflected_receiver is not None
+        else None
+    )
+    secondary_surface_hit = mesh.intersect_ray(
+        reflected_origin,
+        reflection_sample.direction,
+        ignore_face=surface_hit.face_index,
+        min_t=config.epsilon_mm,
+        max_t=reflected_receiver_distance,
+    )
+    reflection_summary["max_observed_depth"] = 1
+
+    if secondary_surface_hit is not None:
+        reflection_summary["surface_hit_count"] += 1
+        secondary_optical = resolved_optical_by_face[secondary_surface_hit.face_index]
+        secondary_reflected_power = emitted_power * secondary_optical.profile.reflectance
+        secondary_contribution = (
+            _surface_contribution_for_face(
+                contribution_summary,
+                mesh,
+                secondary_surface_hit.face_index,
+                face_contribution_cache,
+            )
+            if detailed_contributions
+            else None
+        )
+        if detailed_contributions:
+            _record_surface_hit_contribution(
+                contribution_summary,
+                secondary_contribution,
+                1,
+                emitted_power,
+                secondary_reflected_power,
+            )
+        _record_optical_summary(
+            optical_summary,
+            secondary_optical.profile,
+            secondary_optical.source,
+            emitted_power,
+            secondary_reflected_power,
+        )
+        _prepare_reflection_emission(
+            rng,
+            reflection_sample.direction,
+            secondary_surface_hit.normal,
+            secondary_reflected_power,
+            secondary_optical.profile,
+            config,
+            reflection_summary,
+            1,
+        )
+        _record_reflection_outcome(
+            reflection_summary,
+            reflection_sample.lobe,
+            "blocked",
+            1,
+        )
+        _record_surface_reflection_outcome(
+            contribution_summary,
+            surface_contribution,
+            reflection_sample.lobe,
+            "blocked",
+            emitted_power,
+            1,
+        )
+        if detailed_contributions:
+            _record_secondary_blocker_contribution(
+                contribution_summary,
+                secondary_contribution,
+                reflection_sample.lobe,
+                emitted_power,
+                1,
+            )
+        if store_path:
+            path_events.append(
+                _surface_ray_hit(
+                    mesh,
+                    secondary_surface_hit.face_index,
+                    secondary_surface_hit.point,
+                    secondary_surface_hit.normal,
+                    secondary_surface_hit.t,
+                    emitted_power,
+                    secondary_reflected_power,
+                    depth=1,
+                    optical_profile=secondary_optical.profile,
+                    optical_source=secondary_optical.source,
+                    ray_kind=reflection_sample.lobe,
+                )
+            )
+            stored_paths.append(path_events)
+        return 0, 2, 1
+
+    if reflected_receiver is not None:
+        _record_receiver_hit(reflected_receiver)
+        _record_reflection_outcome(
+            reflection_summary,
+            reflection_sample.lobe,
+            "receiver",
+            1,
+            reflected_receiver.received_power_lumen,
+        )
+        _record_reflected_receiver_contribution(
+            contribution_summary,
+            reflected_receiver,
+            reflection_sample.lobe,
+            1,
+        )
+        _record_surface_reflection_outcome(
+            contribution_summary,
+            surface_contribution,
+            reflection_sample.lobe,
+            "receiver",
+            emitted_power,
+            1,
+            received_flux_lumen=reflected_receiver.received_power_lumen,
+        )
+        if store_path:
+            path_events.append(reflected_receiver.to_ray_hit())
+            stored_paths.append(path_events)
+        return 1, 1, 0
+
+    _record_reflection_outcome(
+        reflection_summary,
+        reflection_sample.lobe,
+        "escaped",
+        1,
+    )
+    _record_surface_reflection_outcome(
+        contribution_summary,
+        surface_contribution,
+        reflection_sample.lobe,
+        "escaped",
+        emitted_power,
+        1,
+    )
+    if store_path:
+        stored_paths.append(path_events)
+    return 0, 1, 1
 
 
 def _iter_primary_emitter_rays(
@@ -495,18 +937,27 @@ def _iter_primary_emitter_rays(
 def _empty_reflection_summary(config: RayTraceConfig) -> Dict:
     return {
         "enabled": config.max_depth >= 1,
-        "implemented_max_depth": min(config.max_depth, 1),
+        "implemented_max_depth": config.max_depth,
+        "termination_mode": config.termination_mode,
+        "min_energy_lumen": config.min_energy,
+        "max_observed_depth": 0,
+        "surface_hit_count": 0,
         "primary_surface_hit_count": 0,
         "reflection_attempt_count": 0,
         "reflection_emitted_count": 0,
         "reflection_receiver_hit_count": 0,
         "reflection_blocked_count": 0,
+        "reflection_continued_count": 0,
         "reflection_escaped_count": 0,
         "reflection_below_energy_count": 0,
         "reflection_disabled_count": 0,
+        "depth_limit_count": 0,
+        "roulette_terminated_count": 0,
+        "roulette_survived_count": 0,
         "direct_receiver_hit_count": 0,
         "direct_receiver_flux_lumen": 0.0,
         "reflected_receiver_flux_lumen": 0.0,
+        "depths": {},
         "lobes": {
             lobe: {
                 "emitted_count": 0,
@@ -514,6 +965,7 @@ def _empty_reflection_summary(config: RayTraceConfig) -> Dict:
                 "receiver_hit_count": 0,
                 "receiver_flux_lumen": 0.0,
                 "blocked_count": 0,
+                "continued_count": 0,
                 "escaped_count": 0,
             }
             for lobe in ("specular", "lambertian", "gaussian")
@@ -521,7 +973,414 @@ def _empty_reflection_summary(config: RayTraceConfig) -> Dict:
     }
 
 
-def _prepare_reflection_sample(
+def _empty_count_flux() -> Dict[str, float]:
+    return {"hit_count": 0, "flux_lumen": 0.0}
+
+
+def _empty_lobe_contribution() -> Dict[str, float]:
+    return {
+        "emitted_count": 0,
+        "emitted_flux_lumen": 0.0,
+        "receiver_hit_count": 0,
+        "receiver_flux_lumen": 0.0,
+        "blocked_count": 0,
+        "blocked_flux_lumen": 0.0,
+        "continued_count": 0,
+        "continued_flux_lumen": 0.0,
+        "escaped_count": 0,
+        "escaped_flux_lumen": 0.0,
+    }
+
+
+def _empty_depth_contribution() -> Dict[str, float]:
+    return {
+        "surface_hit_count": 0,
+        "surface_incident_flux_lumen": 0.0,
+        "reflection_emitted_count": 0,
+        "reflection_emitted_flux_lumen": 0.0,
+        "receiver_hit_count": 0,
+        "receiver_flux_lumen": 0.0,
+        "blocked_count": 0,
+        "blocked_flux_lumen": 0.0,
+        "continued_count": 0,
+        "continued_flux_lumen": 0.0,
+        "escaped_count": 0,
+        "escaped_flux_lumen": 0.0,
+        "secondary_block_count": 0,
+        "secondary_blocked_flux_lumen": 0.0,
+    }
+
+
+def _depth_contribution(entries: Dict[str, Dict], depth: int) -> Dict:
+    depth_key = str(depth)
+    entry = entries.get(depth_key)
+    if entry is None:
+        entry = _empty_depth_contribution()
+        entries[depth_key] = entry
+    return entry
+
+
+def _receiver_depth_contribution(entries: Dict[str, Dict], depth: int) -> Dict:
+    depth_key = str(depth)
+    entry = entries.get(depth_key)
+    if entry is None:
+        entry = _empty_count_flux()
+        entries[depth_key] = entry
+    return entry
+
+
+def _reflection_depth_summary(summary: Dict, depth: int) -> Dict:
+    depth_key = str(depth)
+    entry = summary["depths"].get(depth_key)
+    if entry is None:
+        entry = {
+            "emitted_count": 0,
+            "emitted_flux_lumen": 0.0,
+            "receiver_hit_count": 0,
+            "receiver_flux_lumen": 0.0,
+            "blocked_count": 0,
+            "continued_count": 0,
+            "escaped_count": 0,
+        }
+        summary["depths"][depth_key] = entry
+    return entry
+
+
+def _empty_receiver_contribution(receiver_id: str) -> Dict:
+    return {
+        "receiver_id": receiver_id,
+        "direct": _empty_count_flux(),
+        "reflected": _empty_count_flux(),
+        "total": _empty_count_flux(),
+        "lobes": {
+            lobe: _empty_count_flux()
+            for lobe in ("specular", "lambertian", "gaussian")
+        },
+        "depths": {},
+    }
+
+
+def _empty_surface_contribution(
+    target_id: str,
+    component_id: Optional[str] = None,
+    material_id: Optional[str] = None,
+) -> Dict:
+    contribution = {
+        "target_id": target_id,
+        "surface_hit_count": 0,
+        "surface_incident_flux_lumen": 0.0,
+        "surface_reflectable_flux_lumen": 0.0,
+        "primary_hit_count": 0,
+        "incident_flux_lumen": 0.0,
+        "reflectable_flux_lumen": 0.0,
+        "reflection_emitted_count": 0,
+        "reflection_emitted_flux_lumen": 0.0,
+        "receiver_hit_count": 0,
+        "receiver_flux_lumen": 0.0,
+        "reflection_blocked_count": 0,
+        "reflection_blocked_flux_lumen": 0.0,
+        "continued_count": 0,
+        "continued_flux_lumen": 0.0,
+        "secondary_block_count": 0,
+        "secondary_blocked_flux_lumen": 0.0,
+        "escaped_count": 0,
+        "escaped_flux_lumen": 0.0,
+        "lobes": {
+            lobe: _empty_lobe_contribution()
+            for lobe in ("specular", "lambertian", "gaussian")
+        },
+        "depths": {},
+    }
+    if component_id is not None:
+        contribution["component_id"] = component_id
+    if material_id is not None:
+        contribution["material_id"] = material_id
+    return contribution
+
+
+def _empty_contribution_summary(
+    receivers: List[ReceiverSpec],
+) -> RayTraceContributionSummary:
+    return RayTraceContributionSummary(
+        receivers={
+            receiver.receiver_id: _empty_receiver_contribution(receiver.receiver_id)
+            for receiver in receivers
+            if receiver.enabled
+        },
+        lobes={
+            lobe: _empty_lobe_contribution()
+            for lobe in ("specular", "lambertian", "gaussian")
+        },
+    )
+
+
+def _surface_contribution_for_face(
+    summary: RayTraceContributionSummary,
+    mesh: TriangleMesh,
+    face_index: int,
+    cache: List[Optional[Dict]],
+) -> Dict:
+    cached = cache[face_index]
+    if cached is not None:
+        return cached
+    metadata = mesh.metadata(face_index)
+    component_id = metadata.get("component_id")
+    if component_id is None:
+        component_id = metadata.get("step_component_id")
+    material_id = mesh.material_id(face_index) or "unassigned"
+    component_key = str(component_id) if component_id is not None else "unassigned"
+    face_key = str(face_index)
+    contribution = _empty_surface_contribution(
+        face_key,
+        component_id=component_key,
+        material_id=str(material_id),
+    )
+    summary.faces[face_key] = contribution
+    cache[face_index] = contribution
+    return contribution
+
+
+def _record_surface_hit_contribution(
+    summary: RayTraceContributionSummary,
+    contribution: Dict,
+    depth: int,
+    incident_flux_lumen: float,
+    reflectable_flux_lumen: float,
+) -> None:
+    contribution["surface_hit_count"] += 1
+    contribution["surface_incident_flux_lumen"] += incident_flux_lumen
+    contribution["surface_reflectable_flux_lumen"] += reflectable_flux_lumen
+    if depth == 0:
+        contribution["primary_hit_count"] += 1
+        contribution["incident_flux_lumen"] += incident_flux_lumen
+        contribution["reflectable_flux_lumen"] += reflectable_flux_lumen
+    surface_depth = _depth_contribution(contribution["depths"], depth)
+    surface_depth["surface_hit_count"] += 1
+    surface_depth["surface_incident_flux_lumen"] += incident_flux_lumen
+
+
+def _record_surface_reflection_emission(
+    summary: RayTraceContributionSummary,
+    contribution: Optional[Dict],
+    lobe: str,
+    emitted_flux_lumen: float,
+    depth: int,
+) -> None:
+    global_lobe = summary.lobes[lobe]
+    global_lobe["emitted_count"] += 1
+    global_lobe["emitted_flux_lumen"] += emitted_flux_lumen
+    if contribution is None:
+        depth_entry = _depth_contribution(summary.depths, depth)
+        depth_entry["reflection_emitted_count"] += 1
+        depth_entry["reflection_emitted_flux_lumen"] += emitted_flux_lumen
+        return
+    contribution["reflection_emitted_count"] += 1
+    contribution["reflection_emitted_flux_lumen"] += emitted_flux_lumen
+    lobe_contribution = contribution["lobes"][lobe]
+    lobe_contribution["emitted_count"] += 1
+    lobe_contribution["emitted_flux_lumen"] += emitted_flux_lumen
+    depth_entry = _depth_contribution(contribution["depths"], depth)
+    depth_entry["reflection_emitted_count"] += 1
+    depth_entry["reflection_emitted_flux_lumen"] += emitted_flux_lumen
+
+
+def _record_surface_reflection_outcome(
+    summary: RayTraceContributionSummary,
+    contribution: Optional[Dict],
+    lobe: str,
+    outcome: str,
+    flux_lumen: float,
+    depth: int,
+    received_flux_lumen: Optional[float] = None,
+) -> None:
+    global_lobe = summary.lobes[lobe]
+    outcome_flux_lumen = (
+        received_flux_lumen
+        if outcome == "receiver" and received_flux_lumen is not None
+        else flux_lumen
+    )
+    if outcome == "receiver":
+        global_lobe["receiver_hit_count"] += 1
+        global_lobe["receiver_flux_lumen"] += outcome_flux_lumen
+    elif outcome == "blocked":
+        global_lobe["blocked_count"] += 1
+        global_lobe["blocked_flux_lumen"] += flux_lumen
+    elif outcome == "continued":
+        global_lobe["continued_count"] += 1
+        global_lobe["continued_flux_lumen"] += flux_lumen
+    else:
+        global_lobe["escaped_count"] += 1
+        global_lobe["escaped_flux_lumen"] += flux_lumen
+    if contribution is None:
+        depth_entry = _depth_contribution(summary.depths, depth)
+        if outcome == "receiver":
+            depth_entry["receiver_hit_count"] += 1
+            depth_entry["receiver_flux_lumen"] += outcome_flux_lumen
+        elif outcome == "blocked":
+            depth_entry["blocked_count"] += 1
+            depth_entry["blocked_flux_lumen"] += flux_lumen
+        elif outcome == "continued":
+            depth_entry["continued_count"] += 1
+            depth_entry["continued_flux_lumen"] += flux_lumen
+        else:
+            depth_entry["escaped_count"] += 1
+            depth_entry["escaped_flux_lumen"] += flux_lumen
+        return
+    lobe_contribution = contribution["lobes"][lobe]
+    if outcome == "receiver":
+        contribution["receiver_hit_count"] += 1
+        contribution["receiver_flux_lumen"] += outcome_flux_lumen
+        lobe_contribution["receiver_hit_count"] += 1
+        lobe_contribution["receiver_flux_lumen"] += outcome_flux_lumen
+    elif outcome == "blocked":
+        contribution["reflection_blocked_count"] += 1
+        contribution["reflection_blocked_flux_lumen"] += flux_lumen
+        lobe_contribution["blocked_count"] += 1
+        lobe_contribution["blocked_flux_lumen"] += flux_lumen
+    elif outcome == "continued":
+        contribution["continued_count"] += 1
+        contribution["continued_flux_lumen"] += flux_lumen
+        lobe_contribution["continued_count"] += 1
+        lobe_contribution["continued_flux_lumen"] += flux_lumen
+    else:
+        contribution["escaped_count"] += 1
+        contribution["escaped_flux_lumen"] += flux_lumen
+        lobe_contribution["escaped_count"] += 1
+        lobe_contribution["escaped_flux_lumen"] += flux_lumen
+    depth_entry = _depth_contribution(contribution["depths"], depth)
+    if outcome == "receiver":
+        depth_entry["receiver_hit_count"] += 1
+        depth_entry["receiver_flux_lumen"] += outcome_flux_lumen
+    elif outcome == "blocked":
+        depth_entry["blocked_count"] += 1
+        depth_entry["blocked_flux_lumen"] += flux_lumen
+    elif outcome == "continued":
+        depth_entry["continued_count"] += 1
+        depth_entry["continued_flux_lumen"] += flux_lumen
+    else:
+        depth_entry["escaped_count"] += 1
+        depth_entry["escaped_flux_lumen"] += flux_lumen
+
+
+def _record_secondary_blocker_contribution(
+    summary: RayTraceContributionSummary,
+    contribution: Dict,
+    lobe: str,
+    blocked_flux_lumen: float,
+    depth: int,
+) -> None:
+    contribution["secondary_block_count"] += 1
+    contribution["secondary_blocked_flux_lumen"] += blocked_flux_lumen
+    lobe_contribution = contribution["lobes"][lobe]
+    lobe_contribution["blocked_count"] += 1
+    lobe_contribution["blocked_flux_lumen"] += blocked_flux_lumen
+    depth_entry = _depth_contribution(contribution["depths"], depth)
+    depth_entry["secondary_block_count"] += 1
+    depth_entry["secondary_blocked_flux_lumen"] += blocked_flux_lumen
+
+
+def _finalize_surface_contributions(
+    summary: RayTraceContributionSummary,
+) -> None:
+    summary.components = {}
+    summary.materials = {}
+    for face_contribution in summary.faces.values():
+        _merge_depth_contributions(summary.depths, face_contribution["depths"])
+        component_id = face_contribution["component_id"]
+        material_id = face_contribution["material_id"]
+        component = summary.components.setdefault(
+            component_id,
+            _empty_surface_contribution(component_id),
+        )
+        material = summary.materials.setdefault(
+            material_id,
+            _empty_surface_contribution(material_id),
+        )
+        _merge_surface_contribution(component, face_contribution)
+        _merge_surface_contribution(material, face_contribution)
+
+
+def _merge_depth_contributions(target: Dict[str, Dict], source: Dict[str, Dict]) -> None:
+    for depth, source_depth in source.items():
+        target_depth = _depth_contribution(target, int(depth))
+        for field_name, value in source_depth.items():
+            target_depth[field_name] += value
+
+
+def _merge_surface_contribution(target: Dict, source: Dict) -> None:
+    for field_name in (
+        "surface_hit_count",
+        "surface_incident_flux_lumen",
+        "surface_reflectable_flux_lumen",
+        "primary_hit_count",
+        "incident_flux_lumen",
+        "reflectable_flux_lumen",
+        "reflection_emitted_count",
+        "reflection_emitted_flux_lumen",
+        "receiver_hit_count",
+        "receiver_flux_lumen",
+        "reflection_blocked_count",
+        "reflection_blocked_flux_lumen",
+        "continued_count",
+        "continued_flux_lumen",
+        "secondary_block_count",
+        "secondary_blocked_flux_lumen",
+        "escaped_count",
+        "escaped_flux_lumen",
+    ):
+        target[field_name] += source[field_name]
+    for lobe, source_lobe in source["lobes"].items():
+        target_lobe = target["lobes"][lobe]
+        for field_name, value in source_lobe.items():
+            target_lobe[field_name] += value
+    for depth, source_depth in source["depths"].items():
+        target_depth = target["depths"].setdefault(depth, _empty_depth_contribution())
+        for field_name, value in source_depth.items():
+            target_depth[field_name] += value
+
+
+def _record_direct_receiver_contribution(
+    summary: RayTraceContributionSummary,
+    candidate: ReceiverHitCandidate,
+) -> None:
+    receiver = summary.receivers[candidate.receiver_id]
+    flux_lumen = candidate.received_power_lumen
+    summary.direct_receiver_hit_count += 1
+    summary.direct_receiver_flux_lumen += flux_lumen
+    receiver["direct"]["hit_count"] += 1
+    receiver["direct"]["flux_lumen"] += flux_lumen
+    receiver["total"]["hit_count"] += 1
+    receiver["total"]["flux_lumen"] += flux_lumen
+    receiver_depth = _receiver_depth_contribution(receiver["depths"], 0)
+    receiver_depth["hit_count"] += 1
+    receiver_depth["flux_lumen"] += flux_lumen
+    depth_entry = _depth_contribution(summary.depths, 0)
+    depth_entry["receiver_hit_count"] += 1
+    depth_entry["receiver_flux_lumen"] += flux_lumen
+
+
+def _record_reflected_receiver_contribution(
+    summary: RayTraceContributionSummary,
+    candidate: ReceiverHitCandidate,
+    lobe: str,
+    depth: int,
+) -> None:
+    receiver = summary.receivers[candidate.receiver_id]
+    flux_lumen = candidate.received_power_lumen
+    summary.reflected_receiver_hit_count += 1
+    summary.reflected_receiver_flux_lumen += flux_lumen
+    receiver["reflected"]["hit_count"] += 1
+    receiver["reflected"]["flux_lumen"] += flux_lumen
+    receiver["total"]["hit_count"] += 1
+    receiver["total"]["flux_lumen"] += flux_lumen
+    receiver["lobes"][lobe]["hit_count"] += 1
+    receiver["lobes"][lobe]["flux_lumen"] += flux_lumen
+    receiver_depth = _receiver_depth_contribution(receiver["depths"], depth)
+    receiver_depth["hit_count"] += 1
+    receiver_depth["flux_lumen"] += flux_lumen
+
+
+def _prepare_reflection_emission(
     rng: random.Random,
     incoming: Vec3,
     normal: Vec3,
@@ -529,35 +1388,55 @@ def _prepare_reflection_sample(
     profile: OpticalProfile,
     config: RayTraceConfig,
     summary: Dict,
-) -> Optional[ReflectionSample]:
-    if config.max_depth < 1:
+    depth: int,
+) -> Optional[Tuple[ReflectionSample, float]]:
+    if depth >= config.max_depth:
+        summary["depth_limit_count"] += 1
         summary["reflection_disabled_count"] += 1
         return None
     summary["reflection_attempt_count"] += 1
-    if reflected_power_lumen < config.min_energy:
-        summary["reflection_below_energy_count"] += 1
-        return None
+    emitted_power_lumen = reflected_power_lumen
+    if config.min_energy > 0.0 and reflected_power_lumen < config.min_energy:
+        if config.termination_mode == "threshold":
+            summary["reflection_below_energy_count"] += 1
+            return None
+        survival_probability = max(
+            0.0,
+            min(1.0, reflected_power_lumen / config.min_energy),
+        )
+        if rng.random() >= survival_probability:
+            summary["reflection_below_energy_count"] += 1
+            summary["roulette_terminated_count"] += 1
+            return None
+        summary["roulette_survived_count"] += 1
+        emitted_power_lumen = config.min_energy
     reflection_sample = sample_reflection_direction(rng, incoming, normal, profile)
     if reflection_sample is None:
         summary["reflection_disabled_count"] += 1
-    return reflection_sample
+        return None
+    return reflection_sample, emitted_power_lumen
 
 
 def _record_reflection_emission(
     summary: Dict,
     reflection_sample: ReflectionSample,
     reflected_power_lumen: float,
+    depth: int,
 ) -> None:
     summary["reflection_emitted_count"] += 1
     lobe_summary = summary["lobes"][reflection_sample.lobe]
     lobe_summary["emitted_count"] += 1
     lobe_summary["emitted_flux_lumen"] += reflected_power_lumen
+    depth_entry = _reflection_depth_summary(summary, depth)
+    depth_entry["emitted_count"] += 1
+    depth_entry["emitted_flux_lumen"] += reflected_power_lumen
 
 
 def _record_reflection_outcome(
     summary: Dict,
     lobe: str,
     outcome: str,
+    depth: int,
     received_power_lumen: float = 0.0,
 ) -> None:
     lobe_summary = summary["lobes"][lobe]
@@ -569,9 +1448,22 @@ def _record_reflection_outcome(
     elif outcome == "blocked":
         summary["reflection_blocked_count"] += 1
         lobe_summary["blocked_count"] += 1
+    elif outcome == "continued":
+        summary["reflection_continued_count"] += 1
+        lobe_summary["continued_count"] += 1
     else:
         summary["reflection_escaped_count"] += 1
         lobe_summary["escaped_count"] += 1
+    depth_entry = _reflection_depth_summary(summary, depth)
+    if outcome == "receiver":
+        depth_entry["receiver_hit_count"] += 1
+        depth_entry["receiver_flux_lumen"] += received_power_lumen
+    elif outcome == "blocked":
+        depth_entry["blocked_count"] += 1
+    elif outcome == "continued":
+        depth_entry["continued_count"] += 1
+    else:
+        depth_entry["escaped_count"] += 1
 
 
 def _surface_ray_hit(

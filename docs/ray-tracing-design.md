@@ -302,6 +302,9 @@ RT-1 한계:
 - direct/reflected flux를 분리한다.
 - component별 차폐/반사/Receiver 기여도를 집계한다.
 - 3D ray path와 결과 리포트에서 direct/blocked/reflected를 구분한다.
+- RT-2D-A 상태: `rt-contribution.v1` backend 계약과 Receiver/component/face/material/lobe 집계 구현 및 회귀 검증 완료.
+- RT-2D-B 다음 작업: 기여도 UI, 정렬/필터, CSV/리포트 연결.
+- 상세 계약: `docs/contribution-data-contract.md`
 
 검증:
 - 완전 차폐판은 direct Receiver hit를 0으로 만들어야 한다.
@@ -314,15 +317,18 @@ RT-1 한계:
 목표:
 - `max_depth = 1~3` 범위에서 다중 반사를 지원한다.
 - 에너지 threshold 기반 ray 종료를 적용한다.
+- 상태: backend, Web UI 입력, 합성 회귀 검증 및 시각 리포트 구현 완료.
+- 검증 보고서: `docs/rt3-multibounce-validation.md`
 
 구현:
-- bounce loop
-- Russian roulette 또는 deterministic threshold termination
-- ray path 저장 옵션
+- bounce loop `[완료]`
+- Russian roulette와 deterministic threshold termination `[완료]`
+- bounce depth별 ray path 및 기여도 저장 `[완료]`
 
 검증:
 - max_depth 증가에 따라 hit 가능 경로가 늘어난다.
 - energy threshold를 높이면 계산 시간이 줄고 결과가 보수적으로 작아진다.
+- 합성 2-mirror 모델에서 `max_depth=2`, `R=0.8 × 0.5` 조건의 Receiver flux `0.4 lumen` 일치를 확인했다.
 
 ### Phase RT-4: BVH 가속
 목표:
@@ -436,5 +442,12 @@ src/leakage_simulator/raytracing/
 
 ### 다음 단계
 - PERF-2 flat BVH 기반 CAD triangle 교차 가속을 완료했다.
+
+### PERF-3A 완료
+- `max_depth=0~1` 단일 반사 Fast Path와 `max_depth>=2` multi-bounce 경로를 분리했다.
+- Fast summary와 Detailed contribution 집계 모드를 추가했다.
+- 백만 Gaussian ray Fast summary는 `23.19초`, Detailed contribution은 `24.52초`였다.
+- 두 모드의 Receiver hit와 flux가 동일함을 검증했다.
+- 상세 보고서: `docs/perf3a-report.md`
 - 다음은 실제 회사 TV ROI 도면의 end-to-end 성능 측정과 RT-2D 결과 분해다.
 - 상세 정책과 CPU/GPU fallback은 `docs/performance-acceleration-plan.md`에서 관리한다.
