@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import math
 
 from .geometry import TriangleMesh
@@ -26,8 +26,15 @@ def build_direct_trace_input(
         OpticalAssignment.from_dict(dict(item))
         for item in request_payload.get("optical_assignments", [])
     ]
+    mesh = build_transformed_mesh(scene_mesh, request_payload.get("transform_rules", []))
+    roi_faces = request_payload.get("roi_faces")
+    if roi_faces:
+        roi_face_indices = [int(value) for value in roi_faces]
+        mesh, face_remap = filter_mesh_to_roi(mesh, roi_face_indices)
+        _remap_face_emitters(emitters, face_remap)
+        _remap_face_optical_assignments(optical_assignments, face_remap)
     return DirectRayTraceInput(
-        mesh=build_transformed_mesh(scene_mesh, request_payload.get("transform_rules", [])),
+        mesh=mesh,
         emitters=emitters,
         receivers=receivers,
         optical_profiles=optical_profiles,
@@ -35,6 +42,70 @@ def build_direct_trace_input(
         project_name=str(request_payload.get("project_name") or "TV-Leakage-Direct"),
         optical_assignments=optical_assignments,
     )
+
+
+def filter_mesh_to_roi(
+    mesh: TriangleMesh,
+    roi_face_indices: List[int],
+) -> Tuple[TriangleMesh, Dict[int, int]]:
+    """Trims an already-transformed direct-trace mesh down to just the ROI
+    faces, agreed with the ray-trace owner as "ROI를 선택하면 그 영역만 분석한다"
+    (only the selected ROI region gets analyzed, not the full model).
+
+    Returns the trimmed mesh plus a map from original scene face index (the
+    same indices ROI selection in the web UI works with, and that
+    build_transformed_mesh stores as each face's "source_face_index"
+    metadata) to the new, trimmed mesh's face index - callers must remap any
+    face-index references (face-type emitters, face-level optical
+    assignment overrides) through this before using them against the
+    trimmed mesh.
+    """
+    roi_set = set(roi_face_indices)
+    trimmed = TriangleMesh()
+    remap: Dict[int, int] = {}
+    for face_index in range(len(mesh.faces)):
+        source_face_index = mesh.metadata(face_index).get("source_face_index")
+        if source_face_index is None or source_face_index not in roi_set:
+            continue
+        v0, v1, v2 = mesh.face_vertices(face_index)
+        new_v0 = trimmed.add_vertex(v0)
+        new_v1 = trimmed.add_vertex(v1)
+        new_v2 = trimmed.add_vertex(v2)
+        new_face_index = trimmed.add_face(
+            new_v0, new_v1, new_v2, mesh.material_id(face_index), dict(mesh.metadata(face_index))
+        )
+        remap[source_face_index] = new_face_index
+    if not trimmed.faces:
+        raise ValueError("ROI selection produced an empty mesh - nothing to trace")
+    return trimmed, remap
+
+
+def _remap_face_emitters(emitters: List[EmitterSpec], face_remap: Dict[int, int]) -> None:
+    for emitter in emitters:
+        if emitter.emitter_type != "face":
+            continue
+        remapped = [face_remap[index] for index in emitter.face_indices if index in face_remap]
+        if not remapped:
+            raise ValueError(
+                "Emitter '{}' has no faces left inside the selected ROI".format(emitter.emitter_id)
+            )
+        emitter.face_indices = remapped
+
+
+def _remap_face_optical_assignments(
+    optical_assignments: List[OpticalAssignment],
+    face_remap: Dict[int, int],
+) -> None:
+    for assignment in optical_assignments:
+        if assignment.target_type != "faces":
+            continue
+        # Unlike emitters, a face-level material override commonly spans
+        # faces well outside any one ROI - dropping the out-of-ROI faces and
+        # leaving the rest (even if that means an empty override) is the
+        # expected behavior here, not an error.
+        assignment.face_indices = [
+            face_remap[index] for index in assignment.face_indices if index in face_remap
+        ]
 
 
 def build_transformed_mesh(

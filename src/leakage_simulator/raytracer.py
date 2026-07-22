@@ -173,6 +173,32 @@ def run_simulation(engine_input: EngineInput) -> SimulationOutput:
         config=engine_input.config,
     )
 
+    summary = RunResultSummary(
+        run_id=run_id,
+        total_rays=total_rays,
+        hit_count=hit_count,
+        max_depth=engine_input.config.max_depth,
+        runtime_sec=runtime,
+        metadata={
+            "source_is_synthetic": engine_input.source_is_synthetic,
+            "import_note": engine_input.import_note,
+        },
+    )
+
+    return SimulationOutput(
+        run_id=run_id,
+        project_name=engine_input.project_name,
+        source_file=engine_input.source_file,
+        summary=summary,
+        receiver_metrics=metrics,
+        mesh_info={
+            "face_count": len(engine_input.mesh.faces),
+            "vertex_count": len(engine_input.mesh.vertices),
+        },
+        emitter_count=len(engine_input.emitters),
+        gap_rule_count=len(engine_input.gap_rules),
+    )
+
 
 def run_direct_ray_trace(trace_input: DirectRayTraceInput) -> RayTraceResult:
     start_time = time.time()

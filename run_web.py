@@ -1446,6 +1446,27 @@ def _build_html_form(material_options: str, version: str) -> str:
       box-shadow: 0 16px 40px rgba(2, 6, 23, 0.28);
       transition: all 220ms ease;
     }}
+    .viewer-card.viewer-card-no-transition {{
+      transition: none !important;
+    }}
+    .viewer-card.is-small-panel .viewer-card-head {{
+      cursor: move;
+      user-select: none;
+    }}
+    .viewer-card-resize-handle {{
+      display: none;
+      position: absolute;
+      right: 2px;
+      bottom: 2px;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      z-index: 6;
+      background: linear-gradient(135deg, transparent 0%, transparent 45%, rgba(148, 163, 184, 0.65) 45%, rgba(148, 163, 184, 0.65) 55%, transparent 55%, transparent 65%, rgba(148, 163, 184, 0.65) 65%, rgba(148, 163, 184, 0.65) 75%, transparent 75%);
+    }}
+    .viewer-card.is-small-panel .viewer-card-resize-handle {{
+      display: block;
+    }}
     .viewer-card-head {{
       display: flex;
       justify-content: space-between;
@@ -1502,9 +1523,9 @@ def _build_html_form(material_options: str, version: str) -> str:
     }}
     .viewer-stage.mode-roi .viewer-card-full {{
       inset: auto 14px 14px auto;
-      width: 31%;
-      min-width: 280px;
-      height: 240px;
+      width: 24.8%;
+      min-width: 224px;
+      height: 192px;
       z-index: 3;
       opacity: 0.98;
     }}
@@ -1595,28 +1616,34 @@ def _build_html_form(material_options: str, version: str) -> str:
           <div class=\"step\">Step 2</div>
           <h2>ROI (target faces)</h2>
           <div class=\"grid\">
-            <label>ROI 선택 방식
-              <select id=\"roiSelectionMode\">
-                <option value=\"none\" selected>선택 방식</option>
-                <option value=\"panel\">Component 선택</option>
-                <option value=\"click\">3D view에서 선택</option>
-              </select>
-            </label>
             <div>
               <label>&nbsp;</label>
-              <button id=\"clearRoi\" type=\"button\" class=\"ghost\">ROI 초기화</button>
+              <button id=\"roiBoxDragArmToggle\" type=\"button\" class=\"ghost\">+ ROI 추가 (클릭 후 드래그)</button>
             </div>
           </div>
-          <p class=\"small\" id=\"roiModeHint\">먼저 ROI 선택 방식을 정해주세요. 선택 전에는 3D viewer 클릭이 ROI로 반영되지 않습니다.</p>
-          <div id=\"componentSelectBlock\">
-            <label>Component 선택</label>
-            <div id=\"objectList\" class=\"object-list\">
-              <div class=\"small\">Load CAD first</div>
+          <p class=\"small\" id=\"roiModeHint\">박스를 드래그하거나 좌표를 입력해서 ROI를 추가하세요. 여러 개 만들어두고 아래 목록의 체크박스로 켜고 끄면서 분석할 수 있습니다.</p>
+          <div id=\"roiBoxDragBlock\">
+            <p class=\"small\">위 \"+ ROI 추가\" 버튼을 누르면 3D viewer가 정면(XY)/후면(-XY) 뷰로 자동 전환됩니다. 그 상태에서 박스를 드래그하세요. Hide된 컴포넌트는 대상에서 제외됩니다. 선택이 끝나면 자동으로 원래 상태로 돌아가 화면 회전이 다시 가능합니다.<br />반대쪽 면(정면↔후면)을 보려면, 무장된 상태에서도 3D viewer 상단 카메라 버튼의 <b>\"XY\" / \"-XY\"</b>를 눌러 바로 전환할 수 있습니다 (마우스 드래그 회전만 잠겨있고, 이 버튼들은 잠기지 않습니다).</p>
+            <div class=\"row\">
+              <label>ROI 이름</label>
+              <input id=\"roiScopeLabel\" type=\"text\" placeholder=\"ex) bottom-corner\" />
             </div>
           </div>
-          <div id=\"faceIndexBlock\" class=\"row\">
-            <label>Face index 직접 입력</label>
-            <input id=\"roiFacesInput\" name=\"roi_faces\" type=\"text\" placeholder=\"ex) 10,12,25\" />
+          <div id=\"roiPointBlock\">
+            <p class=\"small\">드래그가 잘 안 될 때의 보완 경로 - 좌표를 직접 입력하면 가장 가까운(보이는 컴포넌트 중) face를 찾습니다.</p>
+            <div class=\"row\">
+              <input id=\"roiPointX\" type=\"text\" placeholder=\"X (mm)\" style=\"width:31%\" />
+              <input id=\"roiPointY\" type=\"text\" placeholder=\"Y (mm)\" style=\"width:31%\" />
+              <input id=\"roiPointZ\" type=\"text\" placeholder=\"Z (mm)\" style=\"width:31%\" />
+            </div>
+            <button id=\"roiPointResolve\" type=\"button\" class=\"ghost\">좌표로 Face 찾기</button>
+            <p class=\"small\" id=\"roiPointResult\"></p>
+          </div>
+          <div>
+            <label>ROI List (체크한 항목만 분석에 반영됩니다)</label>
+            <div id=\"roiScopeResults\" class=\"object-list\">
+              <div class=\"small\">아직 만든 ROI가 없습니다.</div>
+            </div>
           </div>
           <p class=\"small\" id=\"roiStat\">Selected Face Count: 0</p>
         </div>
@@ -2043,7 +2070,7 @@ def _build_html_form(material_options: str, version: str) -> str:
           </div>
           <span id=\"renderModeBadge\" class=\"mode-badge\">Wireframe</span>
         </div>
-        <div id=\"viewerTip\" class=\"tip\">Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll.</div>
+        <div id=\"viewerTip\" class=\"tip\">Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, F/Double-click = fit view.</div>
       </div>
       <div class=\"viewer-inner\">
         <div class=\"kpi\">
@@ -2059,6 +2086,7 @@ def _build_html_form(material_options: str, version: str) -> str:
             </div>
             <canvas id=\"canvas3d\" class=\"viewer-canvas\"></canvas>
             <div id=\"threeFullViewer\" class=\"three-viewer\"></div>
+            <div class=\"viewer-card-resize-handle\" data-panel-resize-handle=\"full\"></div>
           </section>
           <section class=\"viewer-card viewer-card-roi\">
             <div class=\"viewer-card-head\">
@@ -2067,6 +2095,7 @@ def _build_html_form(material_options: str, version: str) -> str:
             </div>
             <canvas id=\"roiCanvas\" class=\"viewer-canvas\"></canvas>
             <div id=\"threeRoiViewer\" class=\"three-viewer\"></div>
+            <div class=\"viewer-card-resize-handle\" data-panel-resize-handle=\"roi\"></div>
           </section>
           <details class=\"coord-badge\">
             <summary>
@@ -2352,6 +2381,12 @@ def _build_html_form(material_options: str, version: str) -> str:
   <script type=\"module\">
     import * as THREE from 'three';
     import {{ OrbitControls }} from '/static/vendor/OrbitControls.js';
+    // Module scripts have their own isolated scope - `import`ed bindings
+    // are NOT visible to the classic (non-module) <script> block further
+    // down that defines computeThreeXyBoxFromScreenRect() and friends.
+    // Exposing it on window is what makes plain `THREE.Vector3(...)` etc.
+    // resolve there (unqualified globals fall through to window properties).
+    window.THREE = THREE;
 
     function toVector3Array(value, fallback) {{
       const source = value || fallback || [0, 0, 0];
@@ -2617,6 +2652,7 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.pointerDown = null;
         this.freeRotateDrag = {{ active: false, lastX: 0, lastY: 0 }};
         this.rollDrag = {{ active: false, lastX: 0 }};
+        this.boxDragActive = false;
         this.center = new THREE.Vector3(0, 0, 0);
         this.size = 1;
         this.renderMode = 'wireframe';
@@ -2629,8 +2665,78 @@ def _build_html_form(material_options: str, version: str) -> str:
         this.renderer.domElement.addEventListener('pointermove', (ev) => this.handlePointerMove(ev));
         this.renderer.domElement.addEventListener('pointerup', (ev) => this.handlePointerUp(ev));
         this.renderer.domElement.addEventListener('pointercancel', (ev) => this.handlePointerCancel(ev));
+        this.renderer.domElement.addEventListener('dblclick', (ev) => {{
+          ev.preventDefault();
+          this.fitToViewKeepingOrientation();
+        }});
         this.animate = this.animate.bind(this);
         requestAnimationFrame(this.animate);
+      }}
+
+      // "Fit on View" - keeps whatever direction the user is currently
+      // looking from (unlike fit()/the "Fit" preset button, which resets
+      // to a fixed iso angle) and only moves the camera along that same
+      // direction + retargets, so the currently visible content (the
+      // ROI-filtered subset for the ROI viewer, same as whatever
+      // buildBufferGeometry actually rendered - not the whole original
+      // model) fills the view. Triggered by the F key and by
+      // double-clicking either viewer (see initViewerInteraction).
+      //
+      // Fits the bounding BOX as actually projected onto the camera's
+      // current right/up axes, not a bounding SPHERE - a sphere has to
+      // cover the box's full diagonal, which for a wide, thin, non-cube
+      // shaped assembly (e.g. a flat TV chassis) is considerably larger
+      // than what's actually visible from most angles (especially
+      // straight-on front/back). Fitting to the sphere left a lot of
+      // empty margin around the content ("화면이 가득차지 않고 잘 안 보여").
+      fitToViewKeepingOrientation() {{
+        const surface = this.root.getObjectByName('surface');
+        if (!surface || !surface.geometry) return;
+        if (!surface.geometry.boundingBox) surface.geometry.computeBoundingBox();
+        const box = surface.geometry.boundingBox;
+        if (!box || box.isEmpty()) return;
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        const viewDir = new THREE.Vector3().subVectors(this.camera.position, this.controls.target);
+        if (viewDir.lengthSq() < 1e-8) viewDir.set(1, -1, 0.72);
+        viewDir.normalize();
+        const up = this.camera.up.clone().normalize();
+        const right = new THREE.Vector3().crossVectors(viewDir, up).normalize();
+        if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+        const trueUp = new THREE.Vector3().crossVectors(right, viewDir).normalize();
+
+        const corners = [
+          [box.min.x, box.min.y, box.min.z], [box.max.x, box.min.y, box.min.z],
+          [box.min.x, box.max.y, box.min.z], [box.min.x, box.min.y, box.max.z],
+          [box.max.x, box.max.y, box.min.z], [box.max.x, box.min.y, box.max.z],
+          [box.min.x, box.max.y, box.max.z], [box.max.x, box.max.y, box.max.z],
+        ];
+        let halfWidth = 0.01;
+        let halfHeight = 0.01;
+        const rel = new THREE.Vector3();
+        for (const corner of corners) {{
+          rel.set(corner[0], corner[1], corner[2]).sub(center);
+          halfWidth = Math.max(halfWidth, Math.abs(rel.dot(right)));
+          halfHeight = Math.max(halfHeight, Math.abs(rel.dot(trueUp)));
+        }}
+
+        const vFovRad = THREE.MathUtils.degToRad(this.camera.fov);
+        const aspect = this.camera.aspect || 1;
+        const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * aspect);
+        const distanceForHeight = halfHeight / Math.tan(vFovRad / 2);
+        const distanceForWidth = halfWidth / Math.tan(hFovRad / 2);
+        const margin = 1.08;
+        const distance = Math.max(distanceForHeight, distanceForWidth) * margin;
+
+        this.camera.position.copy(center).addScaledVector(viewDir, distance);
+        this.camera.near = Math.max(distance / 1000, 0.01);
+        this.camera.far = Math.max(distance * 20, 1000);
+        this.camera.updateProjectionMatrix();
+        this.controls.target.copy(center);
+        this.camera.lookAt(center);
+        this.controls.update();
+        this.renderer.render(this.scene, this.camera);
       }}
 
       handlePointerDown(ev) {{
@@ -2643,6 +2749,21 @@ def _build_html_form(material_options: str, version: str) -> str:
           shiftKey: ev.shiftKey,
           altKey: ev.altKey
         }};
+        if (isThreeBoxDragActive(ev)) {{
+          this.boxDragActive = true;
+          this.controls.enabled = false;
+          beginSelectionBoxForMode(ev, this.mode);
+          // Unlike the roll/free-rotate branches below, this DOES capture
+          // the pointer - box-drag is handled entirely within this class's
+          // own handlePointerMove/handlePointerUp (self-contained, not via
+          // the window-level mousemove/mouseup listeners in
+          // initViewerInteraction, which are legacy-2D-canvas-only now).
+          // Capture guarantees this element keeps receiving move/up even if
+          // the cursor drifts over the other viewer card mid-drag.
+          this.renderer.domElement.setPointerCapture?.(ev.pointerId);
+          ev.preventDefault();
+          return;
+        }}
         if ((ev.shiftKey || ev.altKey) && ev.button === 0) {{
           this.rollDrag.active = true;
           this.rollDrag.lastX = ev.clientX;
@@ -2660,6 +2781,17 @@ def _build_html_form(material_options: str, version: str) -> str:
       }}
 
       handlePointerMove(ev) {{
+        if (this.boxDragActive) {{
+          state.selectionBox.currentX = ev.clientX;
+          state.selectionBox.currentY = ev.clientY;
+          // No drawViewer()/syncThreeViewer() here - see the equivalent
+          // note in the legacy window mousemove handler: rebuilding the
+          // whole Three.js scene on every move tick is what made the box
+          // lag behind and never reach its released position.
+          syncDragOverlay();
+          ev.preventDefault();
+          return;
+        }}
         if (this.rollDrag.active) {{
           const dx = ev.clientX - this.rollDrag.lastX;
           this.rollDrag.lastX = ev.clientX;
@@ -2679,8 +2811,43 @@ def _build_html_form(material_options: str, version: str) -> str:
 
       handlePointerUp(ev) {{
         const wasRoll = this.rollDrag.active;
+        const wasBoxDrag = this.boxDragActive;
+        if (wasBoxDrag && state.selectionBox.active) {{
+          state.selectionBox.currentX = ev.clientX;
+          state.selectionBox.currentY = ev.clientY;
+          const dx = state.selectionBox.currentX - state.selectionBox.startX;
+          const dy = state.selectionBox.currentY - state.selectionBox.startY;
+          const boxSize = Math.abs(dx) + Math.abs(dy);
+          // try/finally is load-bearing here: if anything inside the
+          // resolve call throws, state.selectionBox.active must still be
+          // cleared - otherwise handlePointerMove keeps treating the drag
+          // as live forever (box stays glued to the cursor after release,
+          // never settling at the final point).
+          try {{
+            if (boxSize > 8) {{
+              const rect = {{
+                x0: state.selectionBox.startX,
+                y0: state.selectionBox.startY,
+                x1: state.selectionBox.currentX,
+                y1: state.selectionBox.currentY
+              }};
+              if (state.roiSelectionMode === 'box_drag') {{
+                selectRoiFacesInThreeRect(this.mode, rect);
+              }} else if (state.gapTargetMode === 'component_move_gap') {{
+                selectGapComponentsInRect(null, this.mode, rect, state.selectionBox.additive);
+              }} else if (state.gapTargetMode === 'face_gap') {{
+                selectLocalGapFacesInRect(null, this.mode, rect, state.selectionBox.additive);
+              }}
+            }}
+          }} catch (err) {{
+            console.error('ROI box-drag resolve failed', err);
+          }} finally {{
+            state.selectionBox.active = false;
+            syncDragOverlay();
+          }}
+        }}
         this.handlePointerCancel(ev);
-        if (wasRoll || !this.pointerDown) return;
+        if (wasRoll || wasBoxDrag || !this.pointerDown) return;
         const move = Math.abs(ev.clientX - this.pointerDown.x) + Math.abs(ev.clientY - this.pointerDown.y);
         const isPrimaryClick = this.pointerDown.button === 0 && ev.button === 0;
         if (isPrimaryClick && move <= 6) {{
@@ -2706,9 +2873,20 @@ def _build_html_form(material_options: str, version: str) -> str:
       }}
 
       handlePointerCancel(ev) {{
-        if (this.rollDrag.active || this.freeRotateDrag.active) {{
+        if (this.rollDrag.active || this.freeRotateDrag.active || this.boxDragActive) {{
+          if (this.boxDragActive) {{
+            if (state.selectionBox.active) {{
+              // Browser-cancelled mid-drag (e.g. pointercancel) without
+              // going through handlePointerUp's finalize path - just clear
+              // the overlay rather than leaving a stuck box on screen.
+              state.selectionBox.active = false;
+              syncDragOverlay();
+            }}
+            disarmRoiBoxDrag(); // also restores rotation via updateRoiBoxDragArmUI
+          }}
           this.rollDrag.active = false;
           this.freeRotateDrag.active = false;
+          this.boxDragActive = false;
           this.controls.enabled = true;
           try {{
             this.renderer.domElement.releasePointerCapture?.(ev.pointerId);
@@ -2980,9 +3158,23 @@ def _build_html_form(material_options: str, version: str) -> str:
       }}
 
       updateAxisScale(axisScalePercent) {{
-        this.axisScalePercent = Number(axisScalePercent) || this.axisScalePercent || 100;
-        const manualScale = Math.max(0.45, Math.min(1.75, this.axisScalePercent / 100.0));
-        const axisSize = Math.max(this.size * 0.18 * manualScale, 1.0);
+        // Sized relative to the CURRENT camera distance (a constant
+        // fraction of what's visible on screen right now), not a fixed
+        // world-space fraction of the whole model's bounding box - the
+        // old version used this.size (model extent) alone, so zooming in
+        // closer (which fitToViewKeepingOrientation's tighter framing now
+        // does more often) made the triad look proportionally huge
+        // relative to the visible content, even though its world-space
+        // size never changed. Called every frame from animate() so it
+        // keeps tracking zoom/pan/rotate, not just mesh/ROI changes.
+        if (axisScalePercent !== undefined) {{
+          this.axisScalePercent = Number(axisScalePercent) || this.axisScalePercent || 100;
+        }}
+        const manualScale = Math.max(0.45, Math.min(1.75, (this.axisScalePercent || 100) / 100.0));
+        const distance = Math.max(this.camera.position.distanceTo(this.center), 0.01);
+        const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
+        const visibleHeightAtCenter = 2 * distance * Math.tan(fovRad / 2);
+        const axisSize = Math.max(visibleHeightAtCenter * 0.10 * manualScale, 0.01);
         this.axis.scale.setScalar(axisSize);
         this.axis.position.copy(this.center);
         for (const child of this.axis.children) {{
@@ -3082,6 +3274,7 @@ def _build_html_form(material_options: str, version: str) -> str:
 
       animate() {{
         this.controls.update();
+        if (this.axis) this.updateAxisScale();
         this.renderer.render(this.scene, this.camera);
         requestAnimationFrame(this.animate);
       }}
@@ -3105,9 +3298,6 @@ def _build_html_form(material_options: str, version: str) -> str:
       rayTraceResult: null,
       rayTraceRunning: false,
       selectedFaces: new Set(),
-      clickedFaces: new Set(),
-      panelFaces: new Set(),
-      selectedObjectIds: new Set(),
       faceToObjectId: new Map(),
       selectedGapObjectId: null,
       selectedGapObjectIds: new Set(),
@@ -3116,7 +3306,17 @@ def _build_html_form(material_options: str, version: str) -> str:
       selectedTransformRuleIds: new Set(),
       objectsById: new Map(),
       faceAdjacency: new Map(),
-      roiSelectionMode: 'none',
+      roiSelectionMode: 'box_drag',
+      roiBoxDragArmed: false,
+      hiddenObjectIds: new Set(),
+      roiScopes: [],
+      roiScopeSeq: 0,
+      roiPointNote: '',
+      // Remembers where the user last dragged/resized the small corner
+      // preview panel (per card - "full" or "roi", whichever isn't the
+      // big/main one at the moment), so it doesn't reset back to the
+      // default corner position every time the big/small roles swap.
+      smallPanelPlacement: {{ full: null, roi: null }},
       gapTargetMode: 'component_move_gap',
       gapSelectionMethod: 'click',
       viewerEngine: 'three',
@@ -3185,13 +3385,17 @@ def _build_html_form(material_options: str, version: str) -> str:
     const importCadBtn = document.getElementById('importCad');
     const loadDemoCadBtn = document.getElementById('loadDemoCad');
     const useSampleBtn = document.getElementById('useSample');
-    const objectList = document.getElementById('objectList');
-    const roiInput = document.getElementById('roiFacesInput');
     const roiStat = document.getElementById('roiStat');
-    const roiSelectionMode = document.getElementById('roiSelectionMode');
-    const componentSelectBlock = document.getElementById('componentSelectBlock');
-    const faceIndexBlock = document.getElementById('faceIndexBlock');
-    const clearRoiBtn = document.getElementById('clearRoi');
+    const roiBoxDragBlock = document.getElementById('roiBoxDragBlock');
+    const roiBoxDragArmToggle = document.getElementById('roiBoxDragArmToggle');
+    const roiScopeLabel = document.getElementById('roiScopeLabel');
+    const roiScopeResults = document.getElementById('roiScopeResults');
+    const roiPointBlock = document.getElementById('roiPointBlock');
+    const roiPointX = document.getElementById('roiPointX');
+    const roiPointY = document.getElementById('roiPointY');
+    const roiPointZ = document.getElementById('roiPointZ');
+    const roiPointResolve = document.getElementById('roiPointResolve');
+    const roiPointResult = document.getElementById('roiPointResult');
     const roiModeHint = document.getElementById('roiModeHint');
     const cadMeta = document.getElementById('cadMeta');
     const kpiFaces = document.getElementById('kpiFaces');
@@ -3295,6 +3499,10 @@ def _build_html_form(material_options: str, version: str) -> str:
     const viewerStage = document.getElementById('viewerStage');
     const fullViewerCard = document.querySelector('.viewer-card-full');
     const roiViewerCard = document.querySelector('.viewer-card-roi');
+    const fullViewerCardHead = fullViewerCard.querySelector('.viewer-card-head');
+    const roiViewerCardHead = roiViewerCard.querySelector('.viewer-card-head');
+    const fullViewerResizeHandle = document.querySelector('[data-panel-resize-handle="full"]');
+    const roiViewerResizeHandle = document.querySelector('[data-panel-resize-handle="roi"]');
     const fullViewHint = document.getElementById('fullViewHint');
     const roiViewHint = document.getElementById('roiViewHint');
     const viewerTip = document.getElementById('viewerTip');
@@ -3675,6 +3883,10 @@ def _build_html_form(material_options: str, version: str) -> str:
           optical_profiles: opticalPayload.profiles,
           optical_assignments: opticalPayload.assignments,
           transform_rules: state.transformRules.filter((rule) => rule.enabled !== false),
+          // ROI List(state.selectedFaces)에 활성 항목이 있을 때만 보냄 - 비어있으면
+          // 서버 쪽(raytrace_bridge.build_direct_trace_input)이 필터링을 건너뛰고
+          // 기존처럼 전체 모델을 사용한다.
+          roi_faces: state.selectedFaces.size ? uniqueSorted(Array.from(state.selectedFaces)) : undefined,
           config: {{
             ray_count: Math.max(1, totalRayCount),
             max_depth: 1,
@@ -3802,11 +4014,6 @@ def _build_html_form(material_options: str, version: str) -> str:
           nameEl.textContent = item.object_name;
           nameEl.title = 'Double-click or press F2 to rename';
         }}
-      }}
-      const roiRow = objectList ? objectList.querySelector('[data-roi-object-row-id=\"' + objectId + '\"]') : null;
-      if (roiRow) {{
-        const label = roiRow.querySelector('.roi-object-label');
-        if (label) label.textContent = objectLabel(item);
       }}
     }}
 
@@ -4577,50 +4784,41 @@ def _build_html_form(material_options: str, version: str) -> str:
       roiStat.textContent = 'Selected Face Count: ' + state.selectedFaces.size;
     }}
 
+    function setThreeOrbitControlsEnabled(enabled) {{
+      if (threeFullRenderer) threeFullRenderer.controls.enabled = enabled;
+      if (threeRoiRenderer) threeRoiRenderer.controls.enabled = enabled;
+    }}
+
     function updateSelectionModeUI() {{
-      const mode = state.roiSelectionMode;
+      // ROI selection is box-drag/coordinate-input only now (Component
+      // checkbox and 3D-click ROI modes were removed) - this just keeps the
+      // Gap-related hint text in sync; there's no more mode to switch
+      // between, so it no longer touches hidden-block classes or snaps the
+      // camera (that happens when the user arms box-drag instead - see the
+      // roiBoxDragArmToggle click handler).
       const dragSelect = state.gapSelectionMethod === 'drag_box';
       if (state.gapTargetMode === 'face_gap') {{
         roiModeHint.textContent = '현재는 Local face move 선택 모드입니다. ROI는 선택사항이며, 3D viewer 클릭은 local face target 선택으로 동작합니다.';
         viewerTip.textContent = dragSelect
           ? 'Drag = local face 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
           : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll. 선택 모드에서만 Click 선택.';
-        componentSelectBlock.classList.add('hidden-block');
-        faceIndexBlock.classList.add('hidden-block');
         return;
       }}
-      if (mode === 'click') {{
-        roiModeHint.textContent = '3D view에서 선택: 지금부터 3D viewer 클릭이 ROI 선택으로 동작합니다.';
-        viewerTip.textContent = dragSelect
-          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
-          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll. ROI 모드에서만 Click 선택.';
-        componentSelectBlock.classList.add('hidden-block');
-        faceIndexBlock.classList.add('hidden-block');
-      }} else if (mode === 'panel') {{
-        roiModeHint.textContent = 'Component 선택: component 체크 또는 face index 입력으로 ROI를 선택합니다.';
-        viewerTip.textContent = dragSelect
-          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
-          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, Camera preset = 정면/측면 보기 고정.';
-        componentSelectBlock.classList.remove('hidden-block');
-        faceIndexBlock.classList.remove('hidden-block');
-      }} else {{
-        roiModeHint.textContent = 'ROI 선택 방식이 아직 정해지지 않았습니다. 현재 3D viewer 클릭은 하이라이트만 동작합니다.';
-        viewerTip.textContent = dragSelect
-          ? 'Drag = gap target 박스 선택, Ctrl+Drag = add/remove, Middle drag = rotate, Wheel = zoom, Right drag = pan.'
-          : 'Drag/Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, Camera preset = 정면/측면 보기 고정.';
-        componentSelectBlock.classList.add('hidden-block');
-        faceIndexBlock.classList.add('hidden-block');
-      }}
+      roiModeHint.textContent = '위 "+ ROI 추가" 버튼을 누르고 박스를 드래그하거나, 좌표를 입력해서 ROI를 추가하세요. 여러 개 만들어두고 아래 ROI List의 체크박스로 켜고 끄면서 분석할 수 있습니다.';
+      viewerTip.textContent = state.roiBoxDragArmed
+        ? '지금 Drag = ROI 박스 선택 (회전 잠금, 줌/팬은 그대로 동작). 선택이 끝나면 자동으로 원래 상태로 돌아가고 회전도 바로 다시 됩니다.'
+        : '지금은 Drag = 화면 회전입니다. ROI 박스를 그리려면 위 "+ ROI 추가" 버튼을 누르세요.';
     }}
 
     function recomputeSelectedFaces() {{
-      let merged = [];
-      if (state.roiSelectionMode === 'click') {{
-        merged = Array.from(state.clickedFaces);
-      }} else if (state.roiSelectionMode === 'panel') {{
-        merged = Array.from(state.panelFaces);
-      }} else {{
-        merged = [];
+      const merged = [];
+      for (const scope of state.roiScopes) {{
+        if (!scope.active) continue;
+        for (const component of scope.components) {{
+          for (const faceIndex of component.faceIndices) {{
+            merged.push(faceIndex);
+          }}
+        }}
       }}
       state.selectedFaces = new Set(uniqueSorted(merged));
       updateRoiStats();
@@ -4629,43 +4827,168 @@ def _build_html_form(material_options: str, version: str) -> str:
       drawViewer();
     }}
 
-    function refreshSelectionFromObject() {{
-      let faces = [];
-      for (const id of state.selectedObjectIds) {{
-        const item = state.objectsById.get(id);
-        if (item && !item.is_truncated) {{
-          faces = faces.concat(item.face_indices);
-        }}
-      }}
-      const manual = parseFaceList(roiInput.value);
-      state.panelFaces = new Set(uniqueSorted(faces.concat(manual)));
-      recomputeSelectedFaces();
-    }}
-
     function resetRoiSelection() {{
+      state.roiScopes = [];
       state.selectedFaces = new Set();
-      state.clickedFaces = new Set();
-      state.panelFaces = new Set();
       state.inspectedFaceIndex = null;
-      state.selectedObjectIds.clear();
-      roiInput.value = '';
-      const checkboxes = objectList.querySelectorAll('input[type=\"checkbox\"]');
-      for (const box of checkboxes) {{
-        box.checked = false;
-      }}
+      renderRoiScopeResults();
       updateRoiStats();
+      updateViewerMode();
     }}
 
     function updateViewerMode() {{
+      // Auto-promoting ROI View to the big panel whenever any ROI was
+      // active used to break box-drag entirely: after adding the first
+      // ROI, the big panel became the ROI-filtered preview (camera zoomed
+      // to just that region), so any further drag could only ever pick
+      // faces from inside the first ROI (see 2026-07-21_roi execution
+      // wiring / earlier fix). Gating the swap on "currently armed to add
+      // another ROI" resolves both needs at once: while armed (dragging a
+      // new region), Full View is always the big panel so the whole model
+      // is reachable and the small ROI preview isn't needed; the moment
+      // it's disarmed (a drag just completed, or the toggle was never
+      // turned on), ROI View gets promoted to the big panel instead - if
+      // there's an active ROI to actually show there.
       const roiActive = state.selectedFaces.size > 0;
-      viewerStage.className = roiActive ? 'viewer-stage mode-roi' : 'viewer-stage mode-full';
-      if (roiActive) {{
+      const addingRoi = !!state.roiBoxDragArmed;
+      const promoteRoiView = roiActive && !addingRoi;
+      const nextClassName = promoteRoiView ? 'viewer-stage mode-roi' : 'viewer-stage mode-full';
+      const layoutChanged = viewerStage.className !== nextClassName;
+      if (promoteRoiView) {{
         fullViewHint.textContent = 'Mini map with ROI location';
         roiViewHint.textContent = 'Selected ROI promoted to main view';
       }} else {{
         fullViewHint.textContent = 'Imported model';
-        roiViewHint.textContent = 'ROI preview';
+        roiViewHint.textContent = roiActive ? 'Selected ROI preview' : 'ROI preview';
       }}
+      // .viewer-card has `transition: all 220ms ease` (see its CSS) so the
+      // big/small swap normally slides over ~220ms rather than snapping -
+      // a call to .resize() made "right after" the class change still
+      // reads whatever size the transition happens to be at that instant
+      // (still close to the OLD size at t=0), not the final target size.
+      // Arming a new box-drag and dragging fast enough (well within
+      // 220ms) after clicking "+ ROI 추가" hit exactly this window,
+      // computing the unprojected box against a stale camera.aspect -
+      // reported as every drag from the second ROI onward resolving to
+      // "선택 결과: 없음". Suppress the transition just for this
+      // programmatic swap so the layout snaps instantly, then resize()
+      // reads the correct final size right away; user-driven layout
+      // changes elsewhere keep the normal animated transition.
+      if (layoutChanged) {{
+        fullViewerCard.classList.add('viewer-card-no-transition');
+        roiViewerCard.classList.add('viewer-card-no-transition');
+      }}
+      viewerStage.className = nextClassName;
+      if (layoutChanged) {{
+        void fullViewerCard.offsetHeight; // force layout with the transition already suppressed
+      }}
+      if (threeFullRenderer) threeFullRenderer.resize();
+      if (threeRoiRenderer) threeRoiRenderer.resize();
+      if (layoutChanged) {{
+        requestAnimationFrame(function () {{
+          fullViewerCard.classList.remove('viewer-card-no-transition');
+          roiViewerCard.classList.remove('viewer-card-no-transition');
+        }});
+      }}
+      applySmallPanelRole(fullViewerCard, 'full', promoteRoiView);
+      applySmallPanelRole(roiViewerCard, 'roi', !promoteRoiView);
+    }}
+
+    // The small corner preview card (whichever one currently isn't the
+    // big/main view) can be dragged (by its header) and resized (by the
+    // corner grip) - "작업 화면 자체를 자유롭게 이동 및 사이즈 조정" request.
+    // isSmall tells each card whether IT is the small one right now:
+    // dragging/resizing only makes sense then, since the big card fills
+    // the stage via CSS inset:0 regardless of any leftover inline styles.
+    function applySmallPanelRole(card, key, isSmall) {{
+      card.classList.toggle('is-small-panel', isSmall);
+      if (isSmall) {{
+        const remembered = state.smallPanelPlacement[key];
+        if (remembered) {{
+          card.style.left = remembered.left + 'px';
+          card.style.top = remembered.top + 'px';
+          card.style.right = 'auto';
+          card.style.bottom = 'auto';
+          card.style.width = remembered.width + 'px';
+          card.style.height = remembered.height + 'px';
+        }}
+      }} else {{
+        // Big mode relies on CSS `inset: 0` - clear any inline
+        // position/size left over from dragging/resizing while small, or
+        // it would fight with (and win over, since inline styles beat
+        // stylesheet rules) the big-mode layout.
+        card.style.left = '';
+        card.style.top = '';
+        card.style.right = '';
+        card.style.bottom = '';
+        card.style.width = '';
+        card.style.height = '';
+      }}
+    }}
+
+    function initSmallPanelDragAndResize(card, headEl, resizeHandle, key, viewerRendererGetter) {{
+      let dragState = null;
+      let resizeState = null;
+
+      headEl.addEventListener('mousedown', function (ev) {{
+        if (!card.classList.contains('is-small-panel') || ev.button !== 0) return;
+        const stageRect = viewerStage.getBoundingClientRect();
+        const rect = card.getBoundingClientRect();
+        dragState = {{
+          startX: ev.clientX,
+          startY: ev.clientY,
+          startLeft: rect.left - stageRect.left,
+          startTop: rect.top - stageRect.top
+        }};
+        card.classList.add('viewer-card-no-transition');
+        ev.preventDefault();
+      }});
+
+      resizeHandle.addEventListener('mousedown', function (ev) {{
+        if (!card.classList.contains('is-small-panel') || ev.button !== 0) return;
+        const rect = card.getBoundingClientRect();
+        resizeState = {{ startX: ev.clientX, startY: ev.clientY, startWidth: rect.width, startHeight: rect.height }};
+        card.classList.add('viewer-card-no-transition');
+        ev.preventDefault();
+        ev.stopPropagation();
+      }});
+
+      window.addEventListener('mousemove', function (ev) {{
+        if (dragState) {{
+          const stageRect = viewerStage.getBoundingClientRect();
+          const maxLeft = Math.max(0, stageRect.width - card.offsetWidth);
+          const maxTop = Math.max(0, stageRect.height - card.offsetHeight);
+          const left = Math.min(Math.max(dragState.startLeft + (ev.clientX - dragState.startX), 0), maxLeft);
+          const top = Math.min(Math.max(dragState.startTop + (ev.clientY - dragState.startY), 0), maxTop);
+          card.style.left = left + 'px';
+          card.style.top = top + 'px';
+          card.style.right = 'auto';
+          card.style.bottom = 'auto';
+        }}
+        if (resizeState) {{
+          const width = Math.max(220, resizeState.startWidth + (ev.clientX - resizeState.startX));
+          const height = Math.max(160, resizeState.startHeight + (ev.clientY - resizeState.startY));
+          card.style.width = width + 'px';
+          card.style.height = height + 'px';
+          const viewer = viewerRendererGetter();
+          if (viewer) viewer.resize();
+        }}
+      }});
+
+      window.addEventListener('mouseup', function () {{
+        if (!dragState && !resizeState) return;
+        card.classList.remove('viewer-card-no-transition');
+        const rect = card.getBoundingClientRect();
+        const stageRect = viewerStage.getBoundingClientRect();
+        state.smallPanelPlacement[key] = {{
+          left: rect.left - stageRect.left,
+          top: rect.top - stageRect.top,
+          width: rect.width,
+          height: rect.height
+        }};
+        dragState = null;
+        resizeState = null;
+      }});
     }}
 
     function renderModeLabel(mode) {{
@@ -4725,7 +5048,7 @@ def _build_html_form(material_options: str, version: str) -> str:
       const options = {{
         renderMode: state.renderMode,
         selectedFaces: uniqueSorted(Array.from(state.selectedFaces)),
-        hiddenFaces: getThreeHiddenTransformFaces(),
+        hiddenFaces: getThreeHiddenFaces(),
         overlays: buildThreeTransformOverlays(),
         axisScalePercent: state.axisScalePercent,
         pickBaseOnly: state.emitterSelectionActive || state.receiverSelectionActive,
@@ -4742,6 +5065,39 @@ def _build_html_form(material_options: str, version: str) -> str:
 
     function getThreeHiddenTransformFaces() {{
       return uniqueSorted(Array.from(getCommittedTransformFaceSet()));
+    }}
+
+    function getHiddenComponentFaces() {{
+      const faces = [];
+      if (!state.hiddenObjectIds.size) return faces;
+      for (const [faceIndex, objectId] of state.faceToObjectId) {{
+        if (state.hiddenObjectIds.has(objectId)) faces.push(faceIndex);
+      }}
+      return faces;
+    }}
+
+    function getThreeHiddenFaces() {{
+      return uniqueSorted(getThreeHiddenTransformFaces().concat(getHiddenComponentFaces()));
+    }}
+
+    function toggleObjectVisibility(objectId) {{
+      if (state.hiddenObjectIds.has(objectId)) {{
+        state.hiddenObjectIds.delete(objectId);
+      }} else {{
+        state.hiddenObjectIds.add(objectId);
+      }}
+      const row = gapObjectList.querySelector('[data-component-row-id=\"' + objectId + '\"]');
+      const hideBtn = row ? row.querySelector('[data-component-hide]') : null;
+      if (hideBtn) hideBtn.textContent = state.hiddenObjectIds.has(objectId) ? 'Show' : 'Hide';
+      drawViewer();
+    }}
+
+    function visibleObjectIds() {{
+      const ids = [];
+      for (const objectId of state.objectsById.keys()) {{
+        if (!state.hiddenObjectIds.has(objectId)) ids.push(objectId);
+      }}
+      return ids;
     }}
 
     function modelSpanMm() {{
@@ -6078,8 +6434,6 @@ def _build_html_form(material_options: str, version: str) -> str:
         }}
         setInspectedFace(faceIndex);
         selectLocalGapCluster(faceIndex, additive);
-      }} else if (state.roiSelectionMode === 'click') {{
-        toggleClickedFace(faceIndex);
       }} else {{
         setInspectedFace(faceIndex);
         if (state.gapTargetMode === 'component_move_gap') {{
@@ -6165,6 +6519,503 @@ def _build_html_form(material_options: str, version: str) -> str:
         showMaterialPopupAt(0, 0);
       }}
       drawViewer();
+    }}
+
+    // Three.js's own canvas fully replaces (display:none) the old 2D canvas
+    // that state.selectionBox's rectangle used to be drawn onto (see
+    // drawViewerOn's strokeRect) - so that drawing became invisible once the
+    // Three.js viewer became the default renderer. This overlay div gives
+    // the drag box visible feedback regardless of which renderer is active.
+    const dragSelectOverlay = document.createElement('div');
+    dragSelectOverlay.id = 'dragSelectOverlay';
+    dragSelectOverlay.style.cssText = 'position:fixed;border:2px dashed #38bdf8;'
+      + 'background:rgba(56,189,248,0.15);pointer-events:none;z-index:9999;display:none;';
+    document.body.appendChild(dragSelectOverlay);
+
+    function syncDragOverlay() {{
+      if (!state.selectionBox.active) {{
+        dragSelectOverlay.style.display = 'none';
+        return;
+      }}
+      let x0, y0;
+      if (state.selectionBox.engine === 'three') {{
+        // Three.js path stores raw viewport clientX/clientY (see
+        // beginSelectionBoxForMode) - no canvas rect to add back, since the
+        // old 2D canvas is display:none while Three.js is active and its
+        // rect would be all zeros.
+        x0 = Math.min(state.selectionBox.startX, state.selectionBox.currentX);
+        y0 = Math.min(state.selectionBox.startY, state.selectionBox.currentY);
+      }} else {{
+        const canvas = state.selectionBox.canvasMode === 'roi' ? roiCanvas : fullCanvas;
+        const rect = canvas.getBoundingClientRect();
+        x0 = rect.left + Math.min(state.selectionBox.startX, state.selectionBox.currentX);
+        y0 = rect.top + Math.min(state.selectionBox.startY, state.selectionBox.currentY);
+      }}
+      const w = Math.abs(state.selectionBox.currentX - state.selectionBox.startX);
+      const h = Math.abs(state.selectionBox.currentY - state.selectionBox.startY);
+      dragSelectOverlay.style.left = x0 + 'px';
+      dragSelectOverlay.style.top = y0 + 'px';
+      dragSelectOverlay.style.width = w + 'px';
+      dragSelectOverlay.style.height = h + 'px';
+      dragSelectOverlay.style.display = 'block';
+    }}
+
+    // Explicit ON/OFF arm switch for box-drag ROI selection. Without this,
+    // picking "Box 드래그" from the ROI mode dropdown alone would make every
+    // future drag (on either viewer card) a box-select instead of a camera
+    // rotate, with no way back except switching the dropdown away - this
+    // makes it a one-shot arm that always disarms itself right after a
+    // drag resolves (see selectRoiFacesInRect), so rotate comes back
+    // immediately without extra clicks.
+    const roiScopeModal = document.createElement('div');
+    roiScopeModal.id = 'roiScopeModal';
+    roiScopeModal.style.cssText = 'position:fixed;inset:0;background:rgba(2,6,23,0.72);'
+      + 'display:none;align-items:center;justify-content:center;z-index:10000;';
+    roiScopeModal.innerHTML = '<div id=\"roiScopeModalBody\" style=\"background:#0f172a;'
+      + 'border:1px solid #1e293b;border-radius:12px;padding:20px;max-width:420px;width:90%;'
+      + 'color:#e2e8f0;box-shadow:0 16px 40px rgba(2,6,23,0.5);\"></div>';
+    document.body.appendChild(roiScopeModal);
+    roiScopeModal.addEventListener('click', function (ev) {{
+      if (ev.target === roiScopeModal) roiScopeModal.style.display = 'none';
+    }});
+
+    function showRoiScopePopup(scope) {{
+      const body = document.getElementById('roiScopeModalBody');
+      let html;
+      if (!scope || !scope.components.length) {{
+        html = '<h3 style=\"margin:0 0 10px;\">ROI 선택 결과: 없음</h3>'
+          + '<p style=\"margin:0 0 14px;color:#94a3b8;\">박스가 대상과 겹치지 않았거나, 겹친 컴포넌트가 전부 Hide 상태입니다.</p>';
+      }} else {{
+        html = '<h3 style=\"margin:0 0 10px;\">ROI List에 추가됨: ' + scope.scopeId + '</h3>'
+          + '<p style=\"margin:0 0 10px;color:#94a3b8;\">뷰: ' + scope.view + '</p>'
+          + '<ul style=\"margin:0 0 14px;padding-left:18px;\">';
+        for (const component of scope.components) {{
+          const label = component.componentName || ('component ' + component.componentId);
+          html += '<li>' + label + ': face ' + component.faceIndices.length
+            + '개, 면적 ' + component.areaMm2.toFixed(2) + ' mm2</li>';
+        }}
+        html += '</ul>';
+      }}
+      html += '<button type=\"button\" class=\"ghost\" id=\"roiScopeModalClose\">닫기</button>';
+      body.innerHTML = html;
+      document.getElementById('roiScopeModalClose').addEventListener('click', function () {{
+        roiScopeModal.style.display = 'none';
+      }});
+      roiScopeModal.style.display = 'flex';
+    }}
+
+    function updateRoiBoxDragArmUI() {{
+      // Single source of truth for the rotation lock: enabled exactly when
+      // NOT armed. Covers both directions - arming (toggle click) disables
+      // rotation right before the user starts dragging, and disarming
+      // (toggle click OR auto-disarm after a resolved selection) restores
+      // it immediately, even while Box 드래그 mode is still selected -
+      // Receiver/Emitter setup right after finishing ROI needs to rotate
+      // the model.
+      setThreeOrbitControlsEnabled(!state.roiBoxDragArmed);
+      updateViewerMode();
+      if (!roiBoxDragArmToggle) return;
+      roiBoxDragArmToggle.textContent = state.roiBoxDragArmed
+        ? 'ROI 드래그 중... (드래그해서 완료, 다시 누르면 취소)'
+        : '+ ROI 추가 (클릭 후 드래그)';
+      roiBoxDragArmToggle.style.background = state.roiBoxDragArmed ? '#0ea5e9' : '';
+      roiBoxDragArmToggle.style.color = state.roiBoxDragArmed ? '#02132a' : '';
+      roiBoxDragArmToggle.style.borderColor = state.roiBoxDragArmed ? '#38bdf8' : '';
+      if (state.roiSelectionMode === 'box_drag') {{
+        viewerTip.textContent = state.roiBoxDragArmed
+          ? '지금 Drag = ROI 박스 선택 (회전 잠금, 줌/팬은 그대로 동작). 선택이 끝나면 자동으로 원래 상태로 돌아가고 회전도 바로 다시 됩니다.'
+          : '지금은 Drag = 화면 회전입니다. ROI 박스를 그리려면 위 "+ ROI 추가" 버튼을 누르세요.';
+      }}
+    }}
+
+    function disarmRoiBoxDrag() {{
+      if (!state.roiBoxDragArmed) return;
+      state.roiBoxDragArmed = false;
+      updateRoiBoxDragArmUI();
+    }}
+
+    // Mirrors initViewerInteraction's local shouldUseDragSelection/
+    // beginSelectionBox, but callable from LeakageThreeViewer (a class
+    // defined earlier in the file, in its own lexical scope) - the Three.js
+    // canvas sits on top and owns pointerdown when it's the active renderer,
+    // so it needs its own entry point into the same state.selectionBox flow.
+    function isThreeBoxDragActive(ev) {{
+      if (ev.button !== 0 || ev.shiftKey || ev.altKey) return false;
+      if (state.roiSelectionMode === 'box_drag' && state.roiBoxDragArmed) return true;
+      return state.gapSelectionMethod === 'drag_box'
+        && (state.gapTargetMode === 'component_move_gap' || state.gapTargetMode === 'face_gap');
+    }}
+
+    function beginSelectionBoxForMode(ev, mode) {{
+      // Raw viewport coords, not canvas-relative: the old 2D canvas is
+      // display:none while Three.js is active, so its getBoundingClientRect()
+      // would be all zeros. The Three.js canvas's own (real, visible) rect
+      // is fetched fresh at resolve time instead (see
+      // computeThreeXyBoxFromScreenRect).
+      state.selectionBox = {{
+        active: true,
+        engine: 'three',
+        additive: !!(ev.ctrlKey || ev.metaKey),
+        canvasMode: mode,
+        startX: ev.clientX,
+        startY: ev.clientY,
+        currentX: ev.clientX,
+        currentY: ev.clientY
+      }};
+      syncDragOverlay();
+      drawViewer();
+    }}
+
+    function computeFaceBBox(faceIndex) {{
+      const face = state.mesh.faces[faceIndex];
+      const vertexIndices = [face[0], face[1], face[2]];
+      let bboxMin = null;
+      let bboxMax = null;
+      for (const vertexIndex of vertexIndices) {{
+        const v = state.mesh.vertices[vertexIndex];
+        if (!bboxMin) {{
+          bboxMin = [v[0], v[1], v[2]];
+          bboxMax = [v[0], v[1], v[2]];
+        }} else {{
+          bboxMin = [Math.min(bboxMin[0], v[0]), Math.min(bboxMin[1], v[1]), Math.min(bboxMin[2], v[2])];
+          bboxMax = [Math.max(bboxMax[0], v[0]), Math.max(bboxMax[1], v[1]), Math.max(bboxMax[2], v[2])];
+        }}
+      }}
+      return {{ min: bboxMin, max: bboxMax }};
+    }}
+
+    // JS mirror of leakage_simulator.roi.group_faces_by_component - kept in
+    // sync by hand (see docs/roi-native-selection-plan.md "구현 단계" note).
+    // Runs client-side for instant preview; engine.py/roi.py's Python
+    // version is what actually runs when the simulation executes.
+    function groupFacesByComponentJs(faceIndices) {{
+      const groups = new Map();
+      for (const faceIndex of faceIndices) {{
+        const objectId = state.faceToObjectId.has(faceIndex) ? state.faceToObjectId.get(faceIndex) : -1;
+        let group = groups.get(objectId);
+        if (!group) {{
+          group = {{ componentId: objectId, faceIndices: [], areaMm2: 0, bboxMin: null, bboxMax: null }};
+          groups.set(objectId, group);
+        }}
+        group.faceIndices.push(faceIndex);
+        const areas = state.mesh.face_areas_mm2;
+        group.areaMm2 += (areas && areas[faceIndex]) || 0;
+        const bbox = computeFaceBBox(faceIndex);
+        if (!group.bboxMin) {{
+          group.bboxMin = bbox.min;
+          group.bboxMax = bbox.max;
+        }} else {{
+          group.bboxMin = [
+            Math.min(group.bboxMin[0], bbox.min[0]),
+            Math.min(group.bboxMin[1], bbox.min[1]),
+            Math.min(group.bboxMin[2], bbox.min[2]),
+          ];
+          group.bboxMax = [
+            Math.max(group.bboxMax[0], bbox.max[0]),
+            Math.max(group.bboxMax[1], bbox.max[1]),
+            Math.max(group.bboxMax[2], bbox.max[2]),
+          ];
+        }}
+      }}
+      return Array.from(groups.values()).map(function (group) {{
+        const item = state.objectsById.get(group.componentId);
+        return {{
+          componentId: group.componentId,
+          componentName: item ? objectLabel(item) : '',
+          faceIndices: group.faceIndices,
+          areaMm2: group.areaMm2,
+          bboxMin: group.bboxMin,
+          bboxMax: group.bboxMax,
+        }};
+      }});
+    }}
+
+    // ROI List: each entry is a scope from one box-drag or coordinate pick,
+    // with a checkbox controlling whether it's currently "active" (feeds
+    // into state.selectedFaces via recomputeSelectedFaces). This is what
+    // lets several regions be gathered up front and toggled on/off while
+    // analyzing, instead of re-selecting a region every time.
+    function renderRoiScopeResults() {{
+      if (!state.roiScopes.length) {{
+        roiScopeResults.innerHTML = '<div class=\"small\">아직 만든 ROI가 없습니다.</div>';
+        return;
+      }}
+      let html = '';
+      for (const scope of state.roiScopes) {{
+        const faceCount = scope.components.reduce(function (sum, c) {{ return sum + c.faceIndices.length; }}, 0);
+        const areaSum = scope.components.reduce(function (sum, c) {{ return sum + c.areaMm2; }}, 0);
+        html += '<div class=\"object-item\" data-roi-scope-id=\"' + scope.id + '\">'
+          + '<div class=\"component-tree-row\">'
+          + '<label class=\"component-row-main\" style=\"display:flex;align-items:center;gap:8px;cursor:pointer;\">'
+          + '<input type=\"checkbox\" data-roi-scope-toggle=\"' + scope.id + '\"' + (scope.active ? ' checked' : '') + ' />'
+          + '<span class=\"name\">' + scope.scopeId + ' (' + scope.view + ') - face ' + faceCount
+          + '개 / ' + areaSum.toFixed(2) + ' mm2</span>'
+          + '</label>'
+          + '<div class=\"component-row-actions\">'
+          + '<button type=\"button\" class=\"mini-btn ghost\" data-roi-scope-delete=\"' + scope.id + '\">삭제</button>'
+          + '</div>'
+          + '</div>';
+        for (const component of scope.components) {{
+          const label = component.componentName || ('component ' + component.componentId);
+          html += '<div class=\"meta\">' + label + ': face ' + component.faceIndices.length
+            + '개 / ' + component.areaMm2.toFixed(2) + ' mm2</div>';
+        }}
+        html += '</div>';
+      }}
+      roiScopeResults.innerHTML = html;
+      for (const toggle of roiScopeResults.querySelectorAll('[data-roi-scope-toggle]')) {{
+        toggle.addEventListener('change', function (ev) {{
+          const id = parseInt(ev.target.getAttribute('data-roi-scope-toggle'), 10);
+          const scope = state.roiScopes.find(function (s) {{ return s.id === id; }});
+          if (!scope) return;
+          scope.active = ev.target.checked;
+          recomputeSelectedFaces();
+        }});
+      }}
+      for (const del of roiScopeResults.querySelectorAll('[data-roi-scope-delete]')) {{
+        del.addEventListener('click', function (ev) {{
+          const id = parseInt(ev.target.getAttribute('data-roi-scope-delete'), 10);
+          state.roiScopes = state.roiScopes.filter(function (s) {{ return s.id !== id; }});
+          recomputeSelectedFaces();
+          renderRoiScopeResults();
+        }});
+      }}
+    }}
+
+    function addRoiScope(faceIndices) {{
+      if (!faceIndices.length) {{
+        showRoiScopePopup(null);
+        return;
+      }}
+      const components = groupFacesByComponentJs(faceIndices);
+      const label = (roiScopeLabel.value || '').trim();
+      state.roiScopeSeq += 1;
+      const scopeId = label || ('ROI-' + state.roiScopeSeq);
+      const yaw = ((state.transform.yaw % (Math.PI * 2.0)) + Math.PI * 2.0) % (Math.PI * 2.0);
+      const view = Math.abs(yaw - Math.PI) < Math.PI / 2.0 ? 'back_neg_xy' : 'front_xy';
+      const scope = {{ id: state.roiScopeSeq, scopeId: scopeId, view: view, components: components, active: true }};
+      state.roiScopes.push(scope);
+      roiScopeLabel.value = '';
+      recomputeSelectedFaces();
+      renderRoiScopeResults();
+      showRoiScopePopup(scope);
+    }}
+
+    // state.renderScenes.full/roi (scene.triList, used by the legacy 2D
+    // canvas picking below) is only ever populated by drawViewerOn(), which
+    // drawViewer() *skips entirely* whenever state.viewerEngine === 'three'
+    // (it calls syncThreeViewer() and returns early instead) - so triList is
+    // permanently null/stale while the Three.js viewer is active (the
+    // default engine). That's why box-drag always resolved to "선택 결과:
+    // 없음" even though the drag box itself was visible: the resolution
+    // function had no scene to test against. This resolves the box in true
+    // model-space X/Y instead (mirroring roi.py's resolve_faces_in_xy_box
+    // exactly), independent of the old 2D pipeline.
+    // Real 2D triangle-vs-axis-aligned-box intersection (XY only, Z
+    // ignored - see resolveFaceIndicesInXyBoxJs). Neither of the two
+    // approximations tried before this held up:
+    // - bbox-overlap: over-includes anything whose bounding box merely
+    //   passes near the box (a large flat part covering most of the model
+    //   footprint got swept into every unrelated drag - reported as the
+    //   same fixed leftover area, e.g. ~36400 mm2, no matter where the box
+    //   was drawn).
+    // - centroid-in-box: over-corrected the other way - a small drag box
+    //   over an edge/corner of a coarsely-tessellated (few, large
+    //   triangles) part almost never contains that triangle's centroid,
+    //   so dragging directly over a visible part often matched nothing at
+    //   all ("박스가 대상과 겹치지 않았거나...").
+    // True intersection (any vertex in the box, or any box corner inside
+    // the triangle, or any edge crossing) gets both right: an edge/corner
+    // graze is included, but a merely-nearby bounding box isn't.
+    function pointInBoxXY(px, py, xMin, xMax, yMin, yMax) {{
+      return px >= xMin && px <= xMax && py >= yMin && py <= yMax;
+    }}
+
+    function triSign2D(px, py, ax, ay, bx, by) {{
+      return (px - bx) * (ay - by) - (ax - bx) * (py - by);
+    }}
+
+    function pointInTriangle2D(px, py, ax, ay, bx, by, cx, cy) {{
+      const d1 = triSign2D(px, py, ax, ay, bx, by);
+      const d2 = triSign2D(px, py, bx, by, cx, cy);
+      const d3 = triSign2D(px, py, cx, cy, ax, ay);
+      const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+      const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+      return !(hasNeg && hasPos);
+    }}
+
+    function segmentsIntersect2D(ax, ay, bx, by, cx, cy, dx, dy) {{
+      function ccw(px, py, qx, qy, rx, ry) {{
+        return (ry - py) * (qx - px) > (qy - py) * (rx - px);
+      }}
+      return ccw(ax, ay, cx, cy, dx, dy) !== ccw(bx, by, cx, cy, dx, dy)
+        && ccw(ax, ay, bx, by, cx, cy) !== ccw(ax, ay, bx, by, dx, dy);
+    }}
+
+    function triangleIntersectsBoxXY(tri, xMin, xMax, yMin, yMax) {{
+      for (const [x, y] of tri) {{
+        if (pointInBoxXY(x, y, xMin, xMax, yMin, yMax)) return true;
+      }}
+      const corners = [[xMin, yMin], [xMax, yMin], [xMax, yMax], [xMin, yMax]];
+      for (const [bx, by] of corners) {{
+        if (pointInTriangle2D(bx, by, tri[0][0], tri[0][1], tri[1][0], tri[1][1], tri[2][0], tri[2][1])) return true;
+      }}
+      const boxEdges = [[corners[0], corners[1]], [corners[1], corners[2]], [corners[2], corners[3]], [corners[3], corners[0]]];
+      const triEdges = [[tri[0], tri[1]], [tri[1], tri[2]], [tri[2], tri[0]]];
+      for (const [a, b] of triEdges) {{
+        for (const [c, d] of boxEdges) {{
+          if (segmentsIntersect2D(a[0], a[1], b[0], b[1], c[0], c[1], d[0], d[1])) return true;
+        }}
+      }}
+      return false;
+    }}
+
+    function resolveFaceIndicesInXyBoxJs(xMin, xMax, yMin, yMax) {{
+      const faceIndices = [];
+      for (let faceIndex = 0; faceIndex < state.mesh.faces.length; faceIndex++) {{
+        const objectId = state.faceToObjectId.get(faceIndex);
+        if (objectId !== null && objectId !== undefined && state.hiddenObjectIds.has(objectId)) continue;
+        const face = state.mesh.faces[faceIndex];
+        const tri = face.map(function (vertexIndex) {{
+          const v = state.mesh.vertices[vertexIndex];
+          return [v[0], v[1]];
+        }});
+        if (triangleIntersectsBoxXY(tri, xMin, xMax, yMin, yMax)) {{
+          faceIndices.push(faceIndex);
+        }}
+      }}
+      return faceIndices;
+    }}
+
+    // Unprojects the drag rectangle's 4 screen corners through the Three.js
+    // camera onto the world plane through controls.target perpendicular to
+    // the view direction. Because box-drag is only armed after
+    // snapCameraToNearestFrontBack() (pitch=0, yaw=0|PI - see
+    // applyCameraPreset), that view direction is exactly the world Z axis,
+    // so this plane is a plain Z=const plane and the unprojected rectangle
+    // has no keystone distortion - it maps 1:1 to a world-space X/Y box.
+    // Faces away from that reference depth are still tested with the exact
+    // same box (Z is intentionally never compared - see roi.py), which is
+    // the whole point: the box is a Z-unbounded prism, not a depth-limited
+    // one, so a mismatch between "true" perspective footprint and this
+    // fixed box only matters for the box's edges, not its Z behavior.
+    function computeThreeXyBoxFromScreenRect(viewer, minX, maxX, minY, maxY) {{
+      const domRect = viewer.renderer.domElement.getBoundingClientRect();
+      if (domRect.width < 1 || domRect.height < 1) return null;
+      const toNdc = (px, py) => new THREE.Vector2(
+        ((px - domRect.left) / domRect.width) * 2 - 1,
+        -((py - domRect.top) / domRect.height) * 2 + 1
+      );
+      const viewDir = new THREE.Vector3();
+      viewer.camera.getWorldDirection(viewDir);
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(viewDir, viewer.controls.target);
+      const raycaster = new THREE.Raycaster();
+      const corners = [
+        toNdc(minX, minY), toNdc(maxX, minY), toNdc(minX, maxY), toNdc(maxX, maxY)
+      ];
+      const points = [];
+      for (const ndc of corners) {{
+        raycaster.setFromCamera(ndc, viewer.camera);
+        const hit = new THREE.Vector3();
+        if (raycaster.ray.intersectPlane(plane, hit)) points.push(hit);
+      }}
+      if (points.length < 4) return null;
+      const xs = points.map(function (p) {{ return p.x; }});
+      const ys = points.map(function (p) {{ return p.y; }});
+      return {{
+        xMin: Math.min.apply(null, xs), xMax: Math.max.apply(null, xs),
+        yMin: Math.min.apply(null, ys), yMax: Math.max.apply(null, ys)
+      }};
+    }}
+
+    function selectRoiFacesInThreeRect(mode, rect) {{
+      // disarmRoiBoxDrag() must run AFTER the box/face computation below,
+      // not before: disarming triggers updateViewerMode(), which (once at
+      // least one ROI already exists) immediately shrinks Full View back
+      // down and promotes ROI View - so calling it first meant every
+      // second-ROI-onward drag measured the *already-shrunken* viewport
+      // rect in computeThreeXyBoxFromScreenRect() instead of the size the
+      // user was actually dragging on, producing a wildly wrong world box
+      // (confirmed via console: e.g. world box centered ~1000 units away
+      // from the model). The viewport only needs to stay big long enough
+      // to finish reading it here; shrinking a frame later is invisible.
+      const viewer = mode === 'roi' ? threeRoiRenderer : threeFullRenderer;
+      try {{
+        if (!viewer || !state.mesh) {{
+          showRoiScopePopup(null);
+          return;
+        }}
+        const minX = Math.min(rect.x0, rect.x1);
+        const maxX = Math.max(rect.x0, rect.x1);
+        const minY = Math.min(rect.y0, rect.y1);
+        const maxY = Math.max(rect.y0, rect.y1);
+        const box = computeThreeXyBoxFromScreenRect(viewer, minX, maxX, minY, maxY);
+        if (!box) {{
+          showRoiScopePopup(null);
+          return;
+        }}
+        const faceIndices = resolveFaceIndicesInXyBoxJs(box.xMin, box.xMax, box.yMin, box.yMax);
+        addRoiScope(faceIndices);
+      }} finally {{
+        disarmRoiBoxDrag();
+      }}
+    }}
+
+    function selectRoiFacesInRect(canvas, mode, rect) {{
+      disarmRoiBoxDrag();
+      const scene = mode === 'roi' ? state.renderScenes.roi : state.renderScenes.full;
+      if (!scene || !state.mesh) {{
+        showRoiScopePopup(null);
+        return;
+      }}
+      const minX = Math.min(rect.x0, rect.x1);
+      const maxX = Math.max(rect.x0, rect.x1);
+      const minY = Math.min(rect.y0, rect.y1);
+      const maxY = Math.max(rect.y0, rect.y1);
+      const faceIndices = [];
+      for (const tri of scene.triList) {{
+        const objectId = state.faceToObjectId.get(tri.idx);
+        if (objectId !== null && objectId !== undefined && state.hiddenObjectIds.has(objectId)) continue;
+        const cx = (tri.p0.screenX + tri.p1.screenX + tri.p2.screenX) / 3.0;
+        const cy = (tri.p0.screenY + tri.p1.screenY + tri.p2.screenY) / 3.0;
+        if (cx >= minX && cx <= maxX && cy >= minY && cy <= maxY) {{
+          faceIndices.push(tri.idx);
+        }}
+      }}
+      addRoiScope(faceIndices);
+    }}
+
+    function resolveRoiPoint() {{
+      if (!state.mesh) return;
+      const x = parseFloat(roiPointX.value);
+      const y = parseFloat(roiPointY.value);
+      const z = parseFloat(roiPointZ.value);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {{
+        roiPointResult.textContent = 'X/Y/Z를 숫자로 입력하세요.';
+        return;
+      }}
+      let bestIndex = null;
+      let bestDistSq = null;
+      for (let faceIndex = 0; faceIndex < state.mesh.faces.length; faceIndex++) {{
+        const objectId = state.faceToObjectId.get(faceIndex);
+        if (objectId !== null && objectId !== undefined && state.hiddenObjectIds.has(objectId)) continue;
+        const c = state.mesh.face_centroids ? state.mesh.face_centroids[faceIndex] : null;
+        if (!c) continue;
+        const dx = c[0] - x, dy = c[1] - y, dz = c[2] - z;
+        const distSq = dx * dx + dy * dy + dz * dz;
+        if (bestDistSq === null || distSq < bestDistSq) {{
+          bestDistSq = distSq;
+          bestIndex = faceIndex;
+        }}
+      }}
+      if (bestIndex === null) {{
+        roiPointResult.textContent = '후보 Face가 없습니다 (전부 Hide 상태?).';
+        return;
+      }}
+      addRoiScope([bestIndex]);
+      const objectId = state.faceToObjectId.get(bestIndex);
+      const item = objectId !== null && objectId !== undefined ? state.objectsById.get(objectId) : null;
+      roiPointResult.textContent = 'face ' + bestIndex + (item ? ' (' + objectLabel(item) + ')' : '') + ' 찾음, ROI List에 추가됨.';
     }}
 
     function selectGapComponentsInRect(canvas, mode, rect, additive) {{
@@ -6946,10 +7797,10 @@ def _build_html_form(material_options: str, version: str) -> str:
         viewerTip.textContent = isEdges ? 'Emitter: Click near two CAD edges.' : 'Emitter: Select 3 to 6 CAD vertices. Click again to remove.';
       }} else if (state.emitters.length) {{
         emitterSelectionBanner.textContent = state.emitters.length + ' emitter(s) registered. List의 Settings에서 편집합니다.';
-        viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll.';
+        viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, F/Double-click = fit view.';
       }} else {{
         emitterSelectionBanner.textContent = '광원이 없습니다. Add에서 생성 방식을 선택하세요.';
-        viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll.';
+        viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, F/Double-click = fit view.';
       }}
     }}
 
@@ -7476,10 +8327,10 @@ def _build_html_form(material_options: str, version: str) -> str:
         viewerTip.textContent = isEdges ? 'Receiver: Click near two CAD edges.' : 'Receiver: Select 3 to 6 CAD vertices. Click again to remove.';
       }} else if (state.receivers.length) {{
         receiverSelectionBanner.textContent = state.receivers.length + ' receiver(s) registered. List의 Settings에서 편집합니다.';
-        if (!state.emitterSelectionActive) viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll.';
+        if (!state.emitterSelectionActive) viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, F/Double-click = fit view.';
       }} else {{
         receiverSelectionBanner.textContent = 'Receiver가 없습니다. Add에서 배치 방식을 선택하세요.';
-        if (!state.emitterSelectionActive) viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll.';
+        if (!state.emitterSelectionActive) viewerTip.textContent = 'Drag = rotate, Middle drag = rotate, Wheel = zoom, Right drag = pan, Shift/Alt+drag = roll, F/Double-click = fit view.';
       }}
     }}
 
@@ -7852,15 +8703,15 @@ def _build_html_form(material_options: str, version: str) -> str:
         state.objectsById.clear();
         state.faceToObjectId.clear();
         buildFaceAdjacency();
-        objectList.innerHTML = '';
         gapObjectList.innerHTML = '';
+        state.hiddenObjectIds.clear();
+        disarmRoiBoxDrag();
         resetRoiSelection();
         resetGapSelection();
         resetEmittersForScene();
         resetReceiversForScene();
 
         if (!payload.objects.length) {{
-          objectList.innerHTML = '<div class=\"small\">No object split detected. You can input faces manually.</div>';
           gapObjectList.innerHTML = '<div class=\"small\">No component split detected yet.</div>';
         }} else {{
           for (const item of payload.objects) {{
@@ -7868,22 +8719,6 @@ def _build_html_form(material_options: str, version: str) -> str:
             for (const faceIndex of item.face_indices) {{
               state.faceToObjectId.set(faceIndex, item.object_id);
             }}
-            const row = document.createElement('div');
-            row.className = 'object-item';
-            row.setAttribute('data-roi-object-row-id', String(item.object_id));
-            row.innerHTML = '<label><input type=\"checkbox\" data-id=\"' + item.object_id + '\"/> <span class=\"roi-object-label\"></span></label>';
-            row.querySelector('.roi-object-label').textContent = objectLabel(item);
-            const cb = row.querySelector('input');
-            cb.addEventListener('change', function (ev) {{
-              const id = parseInt(ev.target.getAttribute('data-id'), 10);
-              if (ev.target.checked) {{
-                state.selectedObjectIds.add(id);
-              }} else {{
-                state.selectedObjectIds.delete(id);
-              }}
-              refreshSelectionFromObject();
-            }});
-            objectList.appendChild(row);
 
             const gapRow = document.createElement('div');
             gapRow.className = 'object-item';
@@ -7897,12 +8732,14 @@ def _build_html_form(material_options: str, version: str) -> str:
               + '<div class=\"component-row-actions\">'
               + '<button type=\"button\" class=\"mini-btn\" data-component-transform=\"' + item.object_id + '\">Transform</button>'
               + '<button type=\"button\" class=\"mini-btn ghost\" data-component-material=\"' + item.object_id + '\">Material</button>'
+              + '<button type=\"button\" class=\"mini-btn ghost\" data-component-hide=\"' + item.object_id + '\">Hide</button>'
               + '</div>'
               + '</div>';
             const selectArea = gapRow.querySelector('[data-component-select]');
             const nameEl = gapRow.querySelector('[data-component-name]');
             const transformBtn = gapRow.querySelector('[data-component-transform]');
             const materialBtn = gapRow.querySelector('[data-component-material]');
+            const hideBtn = gapRow.querySelector('[data-component-hide]');
             nameEl.textContent = item.object_name;
             selectArea.addEventListener('click', function (ev) {{
               const id = parseInt(ev.currentTarget.getAttribute('data-component-select'), 10);
@@ -7930,6 +8767,12 @@ def _build_html_form(material_options: str, version: str) -> str:
             materialBtn.addEventListener('click', function (ev) {{
               const id = parseInt(ev.currentTarget.getAttribute('data-component-material'), 10);
               focusMaterialForObject(id, ev);
+            }});
+            hideBtn.textContent = state.hiddenObjectIds.has(item.object_id) ? 'Show' : 'Hide';
+            hideBtn.addEventListener('click', function (ev) {{
+              ev.stopPropagation();
+              const id = parseInt(ev.currentTarget.getAttribute('data-component-hide'), 10);
+              toggleObjectVisibility(id);
             }});
             gapObjectList.appendChild(gapRow);
           }}
@@ -8077,19 +8920,39 @@ def _build_html_form(material_options: str, version: str) -> str:
       }}
     }}
 
-    function toggleClickedFace(faceIndex) {{
-      if (faceIndex === null || faceIndex === undefined) return;
-      if (state.clickedFaces.has(faceIndex)) {{
-        state.clickedFaces.delete(faceIndex);
-      }} else {{
-        state.clickedFaces.add(faceIndex);
-      }}
-      recomputeSelectedFaces();
-    }}
-
     function setInspectedFace(faceIndex) {{
       state.inspectedFaceIndex = (faceIndex === null || faceIndex === undefined) ? null : faceIndex;
       drawViewer();
+    }}
+
+    function snapCameraToNearestFrontBack() {{
+      // ROI box-drag only makes sense in a fixed front/back orthographic
+      // view (screen XY must equal model XY - see docs/roi-native-selection-plan.md).
+      // Rather than requiring the user to click the XY/-XY camera preset
+      // button first, snap automatically to whichever is closer to the
+      // current camera orientation when box-drag mode is entered.
+      //
+      // This used to decide using state.transform.yaw, which is a legacy
+      // field only ever written by applyCameraPreset()/the old 2D-canvas
+      // pipeline - LeakageThreeViewer's own free-rotate drag (the one
+      // actually used, since Three.js is the active engine) manipulates
+      // this.camera/this.controls directly and never writes back to
+      // state.transform at all. So state.transform.yaw stayed frozen at
+      // whatever it was initialized to (or last preset-clicked to)
+      // regardless of how the user had actually rotated the view, and this
+      // always resolved to the same preset ("무조건 XY면"). Read the real
+      // current Three.js camera position instead.
+      if (threeFullRenderer && threeFullRenderer.camera && threeFullRenderer.controls) {{
+        const offsetZ = threeFullRenderer.camera.position.z - threeFullRenderer.controls.target.z;
+        applyCameraPreset(offsetZ < 0 ? 'xy_rev' : 'xy');
+        return;
+      }}
+      const twoPi = Math.PI * 2.0;
+      let yaw = state.transform.yaw % twoPi;
+      if (yaw < 0) yaw += twoPi;
+      const distanceToFront = Math.min(yaw, twoPi - yaw);
+      const distanceToBack = Math.abs(yaw - Math.PI);
+      applyCameraPreset(distanceToBack < distanceToFront ? 'xy_rev' : 'xy');
     }}
 
     function parseMoveFieldValue(raw) {{
@@ -8154,6 +9017,7 @@ def _build_html_form(material_options: str, version: str) -> str:
       let py = 0;
       let totalMove = 0;
       function shouldUseDragSelection(ev) {{
+        if (state.roiSelectionMode === 'box_drag' && state.roiBoxDragArmed && !ev.shiftKey) return true;
         return state.gapSelectionMethod === 'drag_box'
           && (state.gapTargetMode === 'component_move_gap' || state.gapTargetMode === 'face_gap')
           && !ev.shiftKey;
@@ -8169,6 +9033,7 @@ def _build_html_form(material_options: str, version: str) -> str:
           currentX: ev.clientX - rect.left,
           currentY: ev.clientY - rect.top
         }};
+        syncDragOverlay();
         drawViewer();
       }}
       function startDrag(ev, mode, canvas) {{
@@ -8193,30 +9058,56 @@ def _build_html_form(material_options: str, version: str) -> str:
           const boxSize = Math.abs(dx) + Math.abs(dy);
           const mode = state.selectionBox.canvasMode;
           const canvas = mode === 'roi' ? roiCanvas : fullCanvas;
-          if (boxSize > 8) {{
-            const rect = {{
-              x0: state.selectionBox.startX,
-              y0: state.selectionBox.startY,
-              x1: state.selectionBox.currentX,
-              y1: state.selectionBox.currentY
-            }};
-            if (state.gapTargetMode === 'component_move_gap') {{
-              selectGapComponentsInRect(canvas, mode, rect, state.selectionBox.additive);
-            }} else if (state.gapTargetMode === 'face_gap') {{
-              selectLocalGapFacesInRect(canvas, mode, rect, state.selectionBox.additive);
+          try {{
+            if (boxSize > 8) {{
+              const rect = {{
+                x0: state.selectionBox.startX,
+                y0: state.selectionBox.startY,
+                x1: state.selectionBox.currentX,
+                y1: state.selectionBox.currentY
+              }};
+              if (state.roiSelectionMode === 'box_drag') {{
+                if (state.selectionBox.engine === 'three') {{
+                  selectRoiFacesInThreeRect(mode, rect);
+                }} else {{
+                  selectRoiFacesInRect(canvas, mode, rect);
+                }}
+              }} else if (state.gapTargetMode === 'component_move_gap') {{
+                selectGapComponentsInRect(canvas, mode, rect, state.selectionBox.additive);
+              }} else if (state.gapTargetMode === 'face_gap') {{
+                selectLocalGapFacesInRect(canvas, mode, rect, state.selectionBox.additive);
+              }}
             }}
+          }} catch (err) {{
+            console.error('ROI/Gap box-drag resolve failed', err);
+          }} finally {{
+            state.selectionBox.active = false;
+            syncDragOverlay();
+            drawViewer();
           }}
-          state.selectionBox.active = false;
-          drawViewer();
         }}
       }});
       window.addEventListener('mousemove', function (ev) {{
         if (state.selectionBox.active) {{
-          const canvas = state.selectionBox.canvasMode === 'roi' ? roiCanvas : fullCanvas;
-          const rect = canvas.getBoundingClientRect();
-          state.selectionBox.currentX = ev.clientX - rect.left;
-          state.selectionBox.currentY = ev.clientY - rect.top;
-          drawViewer();
+          if (state.selectionBox.engine === 'three') {{
+            state.selectionBox.currentX = ev.clientX;
+            state.selectionBox.currentY = ev.clientY;
+            // No drawViewer()/syncThreeViewer() here on purpose: that
+            // rebuilds the whole Three.js scene (setScene -> new
+            // BufferGeometry) on every single mousemove tick, which was
+            // heavy enough to visibly lag/drop the drag (box never
+            // reaching its final position). The overlay div is a cheap,
+            // separate DOM element and doesn't need the 3D scene redrawn
+            // to track the mouse.
+            syncDragOverlay();
+          }} else {{
+            const canvas = state.selectionBox.canvasMode === 'roi' ? roiCanvas : fullCanvas;
+            const rect = canvas.getBoundingClientRect();
+            state.selectionBox.currentX = ev.clientX - rect.left;
+            state.selectionBox.currentY = ev.clientY - rect.top;
+            syncDragOverlay();
+            drawViewer();
+          }}
           return;
         }}
         if (!dragging) return;
@@ -8259,12 +9150,6 @@ def _build_html_form(material_options: str, version: str) -> str:
       }});
     }}
 
-    roiInput.addEventListener('input', function () {{
-      state.panelFaces = new Set(parseFaceList(roiInput.value));
-      state.selectedObjectIds.clear();
-      recomputeSelectedFaces();
-    }});
-
     importCadBtn.addEventListener('click', function () {{
       cadFilePicker.click();
     }});
@@ -8295,14 +9180,13 @@ def _build_html_form(material_options: str, version: str) -> str:
       cadMeta.textContent = 'Sample geometry selected.';
       loadScene();
     }});
-    clearRoiBtn.addEventListener('click', function () {{
-      resetRoiSelection();
-      recomputeSelectedFaces();
+    roiPointResolve.addEventListener('click', function () {{
+      resolveRoiPoint();
     }});
-    roiSelectionMode.addEventListener('change', function () {{
-      state.roiSelectionMode = roiSelectionMode.value;
-      updateSelectionModeUI();
-      recomputeSelectedFaces();
+    roiBoxDragArmToggle.addEventListener('click', function () {{
+      state.roiBoxDragArmed = !state.roiBoxDragArmed;
+      if (state.roiBoxDragArmed) snapCameraToNearestFrontBack();
+      updateRoiBoxDragArmUI();
     }});
     gapTargetMode.addEventListener('change', function () {{
       state.gapTargetMode = gapTargetMode.value;
@@ -8337,6 +9221,23 @@ def _build_html_form(material_options: str, version: str) -> str:
       const target = ev.target.closest('[data-camera]');
       if (!target) return;
       applyCameraPreset(target.getAttribute('data-camera'));
+    }});
+    // "F" = Fit on View (see LeakageThreeViewer.fitToViewKeepingOrientation):
+    // keeps the current viewing angle and only re-frames zoom/pan, applied
+    // to both Full View and ROI View. Double-clicking either viewer does
+    // the same for just that one. Ignored while typing in a text field so
+    // it doesn't hijack a literal "f" keystroke (e.g. in the ROI name
+    // input).
+    window.addEventListener('keydown', function (ev) {{
+      if (ev.key !== 'f' && ev.key !== 'F') return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      const activeTag = document.activeElement ? document.activeElement.tagName : '';
+      const isEditable = activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT'
+        || (document.activeElement && document.activeElement.isContentEditable);
+      if (isEditable) return;
+      if (threeFullRenderer) threeFullRenderer.fitToViewKeepingOrientation();
+      if (threeRoiRenderer) threeRoiRenderer.fitToViewKeepingOrientation();
+      ev.preventDefault();
     }});
     function bindMoveInput(inputElX, inputElY, inputElZ) {{
       if (!inputElX || !inputElY || !inputElZ) return;
@@ -8679,6 +9580,8 @@ def _build_html_form(material_options: str, version: str) -> str:
     axisScaleValue.textContent = state.axisScalePercent + '%';
     updateRenderModeUI();
     initViewerInteraction();
+    initSmallPanelDragAndResize(fullViewerCard, fullViewerCardHead, fullViewerResizeHandle, 'full', function () {{ return threeFullRenderer; }});
+    initSmallPanelDragAndResize(roiViewerCard, roiViewerCardHead, roiViewerResizeHandle, 'roi', function () {{ return threeRoiRenderer; }});
     updateViewerMode();
     initDevAutoRefresh();
     loadScene();

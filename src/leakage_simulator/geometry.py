@@ -632,6 +632,70 @@ class TriangleMesh:
         return entry
 
 
+def subdivide_flat_mesh(
+    mesh: TriangleMesh,
+    max_area_mm2: float,
+    max_depth: int = 6,
+) -> TriangleMesh:
+    """Returns a new TriangleMesh where any face whose area exceeds
+    max_area_mm2 is recursively split into 4 (by connecting edge
+    midpoints, i.e. plain triangle quadrisection) until every piece is
+    small enough or max_depth is reached.
+
+    BRepMesh_IncrementalMesh's deflection tolerance only governs curvature
+    error, so a perfectly flat panel (e.g. a diffuser/LGP sheet) still
+    comes out of STEP tessellation as just 1-2 huge triangles no matter
+    how fine the deflection is set. ROI box-drag selection clips at face
+    granularity (no sub-triangle clipping - see roi.py), so without this
+    step, dragging over any part of such a coarsely-tessellated panel
+    swept in the whole thing - reported as ROI area always coming out to
+    that one panel's total area regardless of where the box was drawn.
+    This closes that gap at import time instead of requiring real
+    polygon-clipping.
+
+    Quadrisection preserves the exact original flat shape (midpoints of a
+    planar triangle are themselves in-plane), so this changes tessellation
+    density only, not geometry. All resulting sub-faces inherit their
+    parent's material_id and metadata unchanged (multiple sub-faces
+    sharing the same "source" component/step-face metadata is expected -
+    downstream component grouping in components.py already aggregates by
+    that metadata across many faces per component).
+    """
+    result = TriangleMesh()
+    vertex_map: Dict[Tuple[int, int, int], int] = {}
+
+    def dedup_vertex(point: Vec3) -> int:
+        key = (round(point[0] * 1000.0), round(point[1] * 1000.0), round(point[2] * 1000.0))
+        existing = vertex_map.get(key)
+        if existing is not None:
+            return existing
+        index = result.add_vertex(point)
+        vertex_map[key] = index
+        return index
+
+    def edge_midpoint(a: Vec3, b: Vec3) -> Vec3:
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0)
+
+    def emit(a: Vec3, b: Vec3, c: Vec3, material_id: str, metadata: Dict, depth: int) -> None:
+        area = face_area(a, b, c)
+        if area <= max_area_mm2 or depth <= 0 or area <= 1e-9:
+            result.add_face(dedup_vertex(a), dedup_vertex(b), dedup_vertex(c), material_id, dict(metadata))
+            return
+        ab = edge_midpoint(a, b)
+        bc = edge_midpoint(b, c)
+        ca = edge_midpoint(c, a)
+        emit(a, ab, ca, material_id, metadata, depth - 1)
+        emit(ab, b, bc, material_id, metadata, depth - 1)
+        emit(ca, bc, c, material_id, metadata, depth - 1)
+        emit(ab, bc, ca, material_id, metadata, depth - 1)
+
+    for face_index in range(len(mesh.faces)):
+        v0, v1, v2 = mesh.face_vertices(face_index)
+        emit(v0, v1, v2, mesh.material_id(face_index), mesh.metadata(face_index), max_depth)
+
+    return result
+
+
 def add_box(
     mesh: TriangleMesh,
     x0: float,

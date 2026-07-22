@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
-from .geometry import TriangleMesh
+from .geometry import TriangleMesh, subdivide_flat_mesh
 from .materials import default_material_library
 from .synth import generate_synthetic_leakage_scene
 from .types import EmitterConfig
@@ -26,6 +26,14 @@ try:
     ocp_available = True
 except Exception:  # pragma: no cover - optional dependency
     ocp_available = False
+
+# ROI 담당자 확인: STEP tessellation leaves large flat panels (diffuser/LGP
+# sheets etc.) as just 1-2 huge triangles, so ROI box-drag (which clips at
+# face granularity - see roi.py) ends up sweeping in the whole panel no
+# matter where the box is drawn. This caps triangle area post-tessellation
+# so box-drag has fine enough faces to select partial regions of a large
+# flat part. See geometry.subdivide_flat_mesh.
+ROI_SUBDIVISION_MAX_AREA_MM2 = 10.0
 
 
 @dataclass
@@ -223,6 +231,7 @@ def _import_step(path: Path) -> ImportResult:
             note="STEP parsed but tessellation produced no triangles; synthetic fallback used.",
         )
 
+    mesh = subdivide_flat_mesh(mesh, ROI_SUBDIVISION_MAX_AREA_MM2)
     receiver_faces = _guess_receiver_faces(mesh)
     return ImportResult(
         mesh=mesh,
@@ -323,6 +332,8 @@ def _import_step_ocp(path: Path) -> ImportResult:
             synthetic=True,
             note="STEP parsed with OCP but tessellation produced no triangles; synthetic fallback used.",
         )
+
+    mesh = subdivide_flat_mesh(mesh, ROI_SUBDIVISION_MAX_AREA_MM2)
 
     guessed_receivers = _guess_receiver_faces(mesh)
     if guessed_receivers:
