@@ -8,6 +8,7 @@ set "CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 set "WV2_DIR=C:\Program Files\Microsoft Office\root\Office16\ADDINS\Microsoft Power Query for Excel Integrated\bin"
 set "WV2_CORE=%WV2_DIR%\Microsoft.Web.WebView2.Core.dll"
 set "WV2_WINFORMS=%WV2_DIR%\Microsoft.Web.WebView2.WinForms.dll"
+set "WV2_LOADER=%WV2_DIR%\WebView2Loader.dll"
 
 if not exist "%CSC%" (
   echo [ERR] csc.exe not found: %CSC%
@@ -21,6 +22,11 @@ if not exist "%WV2_CORE%" (
 
 if not exist "%WV2_WINFORMS%" (
   echo [ERR] WebView2 WinForms dll not found: %WV2_WINFORMS%
+  exit /b 1
+)
+
+if not exist "%WV2_LOADER%" (
+  echo [ERR] WebView2 Loader dll not found: %WV2_LOADER%
   exit /b 1
 )
 
@@ -42,6 +48,7 @@ if errorlevel 1 exit /b 1
 echo [INFO] Copying runtime files...
 copy "%WV2_CORE%" "%OUTDIR%\" >nul
 copy "%WV2_WINFORMS%" "%OUTDIR%\" >nul
+copy "%WV2_LOADER%" "%OUTDIR%\" >nul
 copy "%ROOT%run_web.py" "%OUTDIR%\" >nul
 copy "%ROOT%README.md" "%OUTDIR%\" >nul
 copy "%ROOT%COMPANY_PC_QUICK_START.md" "%OUTDIR%\" >nul

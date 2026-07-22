@@ -632,6 +632,142 @@ class TriangleMesh:
         return entry
 
 
+def estimate_subdivided_face_count(
+    mesh: TriangleMesh,
+    max_area_mm2: float,
+    max_depth: int = 9,
+) -> int:
+    """Predict the face count produced by midpoint quadrisection."""
+    if max_area_mm2 <= 0.0:
+        raise ValueError("max_area_mm2 must be positive")
+    depth_limit = max(0, int(max_depth))
+    total = 0
+    for face_index in range(len(mesh.faces)):
+        area = mesh.area(face_index)
+        depth = 0
+        while area > max_area_mm2 and depth < depth_limit:
+            area /= 4.0
+            depth += 1
+        total += 4 ** depth
+    return total
+
+
+def choose_adaptive_subdivision_area_mm2(
+    mesh: TriangleMesh,
+    target_divisions_across_diagonal: int = 512,
+    min_target_edge_mm: float = 0.5,
+    max_target_edge_mm: float = 3.0,
+    max_output_faces: int = 750_000,
+    max_depth: int = 9,
+) -> float:
+    """Choose a CAD-size-aware triangle area target for precise ROI picking.
+
+    The nominal edge scale follows the model diagonal, while lower/upper edge
+    bounds keep very small and very large CAD models useful. If that density
+    would exceed the output budget, the area target is raised just enough to
+    select the finest quadrisection level that stays within the budget.
+    """
+    if not mesh.vertices or not mesh.faces:
+        return max(1e-9, 0.5 * min_target_edge_mm * min_target_edge_mm)
+    if target_divisions_across_diagonal <= 0:
+        raise ValueError("target_divisions_across_diagonal must be positive")
+    if min_target_edge_mm <= 0.0 or max_target_edge_mm < min_target_edge_mm:
+        raise ValueError("adaptive subdivision edge bounds are invalid")
+
+    spans = [
+        max(vertex[axis] for vertex in mesh.vertices)
+        - min(vertex[axis] for vertex in mesh.vertices)
+        for axis in range(3)
+    ]
+    diagonal = math.sqrt(sum(span * span for span in spans))
+    nominal_edge = diagonal / float(target_divisions_across_diagonal)
+    target_edge = clamp(nominal_edge, min_target_edge_mm, max_target_edge_mm)
+    nominal_area = max(1e-9, 0.5 * target_edge * target_edge)
+
+    face_budget = max(len(mesh.faces), int(max_output_faces))
+    if estimate_subdivided_face_count(mesh, nominal_area, max_depth) <= face_budget:
+        return nominal_area
+
+    low = nominal_area
+    high = max(max(mesh.area(index) for index in range(len(mesh.faces))), low)
+    while estimate_subdivided_face_count(mesh, high, max_depth) > face_budget:
+        high *= 4.0
+
+    # The estimator changes in discrete quadrisection steps. A geometric
+    # search finds the smallest safe threshold without assuming uniform faces.
+    for _ in range(48):
+        middle = math.sqrt(low * high)
+        if estimate_subdivided_face_count(mesh, middle, max_depth) > face_budget:
+            low = middle
+        else:
+            high = middle
+    return high * (1.0 + 1e-12)
+
+
+def subdivide_flat_mesh(
+    mesh: TriangleMesh,
+    max_area_mm2: float,
+    max_depth: int = 9,
+) -> TriangleMesh:
+    """Returns a new TriangleMesh where any face whose area exceeds
+    max_area_mm2 is recursively split into 4 (by connecting edge
+    midpoints, i.e. plain triangle quadrisection) until every piece is
+    small enough or max_depth is reached.
+
+    BRepMesh_IncrementalMesh's deflection tolerance only governs curvature
+    error, so a perfectly flat panel (e.g. a diffuser/LGP sheet) still
+    comes out of STEP tessellation as just 1-2 huge triangles no matter
+    how fine the deflection is set. ROI box-drag selection clips at face
+    granularity (no sub-triangle clipping - see roi.py), so without this
+    step, dragging over any part of such a coarsely-tessellated panel
+    swept in the whole thing - reported as ROI area always coming out to
+    that one panel's total area regardless of where the box was drawn.
+    This closes that gap at import time instead of requiring real
+    polygon-clipping.
+
+    Quadrisection preserves the exact original flat shape (midpoints of a
+    planar triangle are themselves in-plane), so this changes tessellation
+    density only, not geometry. All resulting sub-faces inherit their
+    parent's material_id and metadata unchanged (multiple sub-faces
+    sharing the same "source" component/step-face metadata is expected -
+    downstream component grouping in components.py already aggregates by
+    that metadata across many faces per component).
+    """
+    result = TriangleMesh()
+    vertex_map: Dict[Tuple[int, int, int], int] = {}
+
+    def dedup_vertex(point: Vec3) -> int:
+        key = (round(point[0] * 1000.0), round(point[1] * 1000.0), round(point[2] * 1000.0))
+        existing = vertex_map.get(key)
+        if existing is not None:
+            return existing
+        index = result.add_vertex(point)
+        vertex_map[key] = index
+        return index
+
+    def edge_midpoint(a: Vec3, b: Vec3) -> Vec3:
+        return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (a[2] + b[2]) / 2.0)
+
+    def emit(a: Vec3, b: Vec3, c: Vec3, material_id: str, metadata: Dict, depth: int) -> None:
+        area = face_area(a, b, c)
+        if area <= max_area_mm2 or depth <= 0 or area <= 1e-9:
+            result.add_face(dedup_vertex(a), dedup_vertex(b), dedup_vertex(c), material_id, dict(metadata))
+            return
+        ab = edge_midpoint(a, b)
+        bc = edge_midpoint(b, c)
+        ca = edge_midpoint(c, a)
+        emit(a, ab, ca, material_id, metadata, depth - 1)
+        emit(ab, b, bc, material_id, metadata, depth - 1)
+        emit(ca, bc, c, material_id, metadata, depth - 1)
+        emit(ab, bc, ca, material_id, metadata, depth - 1)
+
+    for face_index in range(len(mesh.faces)):
+        v0, v1, v2 = mesh.face_vertices(face_index)
+        emit(v0, v1, v2, mesh.material_id(face_index), mesh.metadata(face_index), max_depth)
+
+    return result
+
+
 def add_box(
     mesh: TriangleMesh,
     x0: float,
