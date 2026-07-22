@@ -26,6 +26,7 @@ namespace LeakageSimulatorDesktop
 
     internal sealed class LauncherForm : Form
     {
+        private const int StartupTimeoutSeconds = 180;
         private readonly Label _statusLabel;
         private readonly Label _hintLabel;
         private readonly Panel _headerPanel;
@@ -69,7 +70,7 @@ namespace LeakageSimulatorDesktop
                 Height = 18,
                 ForeColor = Color.FromArgb(164, 181, 214),
                 Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-                Text = "Please wait. STEP/X_T import remains available in the desktop package.",
+                Text = "Please wait. STEP/STP import and ray tracing are included in this desktop package.",
             };
 
             _headerPanel.Controls.Add(_hintLabel);
@@ -123,21 +124,31 @@ namespace LeakageSimulatorDesktop
                 StartServerProcess(_appRoot, port);
                 UpdateStatus("Starting local simulation server...");
 
-                bool ok = await WaitForHealthAsync(_webUrl + "/health", 45);
+                bool ok = await WaitForHealthAsync(_webUrl + "/health", StartupTimeoutSeconds);
                 if (!ok)
                 {
                     throw new InvalidOperationException(
-                        "The local web server did not become ready in time." + Environment.NewLine + Environment.NewLine + _lastLogs
+                        BuildStartupFailureMessage()
                     );
                 }
 
                 UpdateStatus("Opening simulator...");
-                await InitializeWebViewAsync();
-                _webView.Source = new Uri(_webUrl);
-                _webView.Visible = true;
-                _logBox.Visible = false;
-                UpdateStatus("Leakage simulator ready");
-                _hintLabel.Text = "Desktop mode: no browser command needed. Just keep this window open.";
+                try
+                {
+                    await InitializeWebViewAsync();
+                    _webView.Source = new Uri(_webUrl);
+                    _webView.Visible = true;
+                    _logBox.Visible = false;
+                    UpdateStatus("Leakage simulator ready");
+                    _hintLabel.Text = "Desktop mode: no browser command needed. Just keep this window open.";
+                }
+                catch (Exception webViewError)
+                {
+                    AppendLog("[WARN] Embedded WebView2 failed: " + webViewError.Message);
+                    Process.Start(_webUrl);
+                    UpdateStatus("Simulator opened in the default browser");
+                    _hintLabel.Text = "Keep this launcher open while using the simulator.";
+                }
             }
             catch (Exception ex)
             {
@@ -197,13 +208,15 @@ namespace LeakageSimulatorDesktop
             ProcessStartInfo psi = new ProcessStartInfo
             {
                 FileName = pythonExe,
-                Arguments = "\"" + runWeb + "\" --port " + port,
+                Arguments = "-u \"" + runWeb + "\" --port " + port + " --strict-port",
                 WorkingDirectory = appRoot,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+            psi.EnvironmentVariables["PYTHONUNBUFFERED"] = "1";
+            psi.EnvironmentVariables["LEAKAGE_DESKTOP_BOOT"] = "1";
 
             _serverProcess = new Process { StartInfo = psi, EnableRaisingEvents = true };
             _serverProcess.OutputDataReceived += OnServerOutput;
@@ -218,8 +231,33 @@ namespace LeakageSimulatorDesktop
                 throw new InvalidOperationException("Failed to start embedded Python server.");
             }
 
+            AppendLog("[INFO] Embedded Python: " + pythonExe);
+            AppendLog("[INFO] Server PID: " + _serverProcess.Id);
             _serverProcess.BeginOutputReadLine();
             _serverProcess.BeginErrorReadLine();
+        }
+
+        private string BuildStartupFailureMessage()
+        {
+            string processState = "The embedded Python process is still running but localhost did not respond.";
+            try
+            {
+                if (_serverProcess != null && _serverProcess.HasExited)
+                {
+                    processState = "The embedded Python process exited early (exit code " + _serverProcess.ExitCode + ").";
+                }
+            }
+            catch
+            {
+            }
+
+            return
+                "The local web server did not become ready within " + StartupTimeoutSeconds + " seconds." +
+                Environment.NewLine + processState +
+                Environment.NewLine + Environment.NewLine +
+                "Likely causes: company endpoint security/antivirus delayed or blocked the embedded Python/CAD runtime, or localhost access was restricted." +
+                Environment.NewLine + "Diagnostic log: " + _launcherLogPath +
+                Environment.NewLine + Environment.NewLine + _lastLogs;
         }
 
         private void OnServerOutput(object sender, DataReceivedEventArgs args)
@@ -298,11 +336,18 @@ namespace LeakageSimulatorDesktop
             };
         }
 
-        private static async Task<bool> WaitForHealthAsync(string url, int timeoutSeconds)
+        private async Task<bool> WaitForHealthAsync(string url, int timeoutSeconds)
         {
             DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSeconds);
+            DateTime nextProgress = DateTime.UtcNow.AddSeconds(10);
             while (DateTime.UtcNow < deadline)
             {
+                if (_serverProcess != null && _serverProcess.HasExited)
+                {
+                    AppendLog("[ERR] Server process exited before health check succeeded. Exit code: " + _serverProcess.ExitCode);
+                    return false;
+                }
+
                 bool ok = false;
                 try
                 {
@@ -323,7 +368,16 @@ namespace LeakageSimulatorDesktop
 
                 if (ok)
                 {
+                    AppendLog("[INFO] Local server health check succeeded.");
                     return true;
+                }
+
+                if (DateTime.UtcNow >= nextProgress)
+                {
+                    int elapsedSeconds = StartupTimeoutSeconds - Math.Max(0, (int)(deadline - DateTime.UtcNow).TotalSeconds);
+                    AppendLog("[INFO] Still preparing local server... " + elapsedSeconds + "s elapsed");
+                    UpdateStatus("Preparing CAD runtime and local server... " + elapsedSeconds + "s");
+                    nextProgress = DateTime.UtcNow.AddSeconds(10);
                 }
 
                 await Task.Delay(600);

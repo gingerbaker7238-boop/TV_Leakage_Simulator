@@ -696,6 +696,57 @@ class SimulationOutput:
         return asdict(self)
 
 
+@dataclass
+class ROIComponentClip:
+    """One component's share of an XY-box ROI drag - only the faces that
+    actually overlap the drag box (see roi.py:resolve_faces_in_xy_box),
+    not the whole component. area_mm2/bbox are computed from just those
+    faces, so a component that only clips the corner of the box gets a
+    correspondingly small area/bbox, not its full-part values."""
+
+    component_id: int
+    component_name: str
+    face_indices: List[int]
+    area_mm2: float
+    bbox_min: Vec3
+    bbox_max: Vec3
+
+
+@dataclass
+class ROIRegionResult:
+    """Result of one box-drag ROI pick. `view` records which fixed
+    orthographic view the drag happened in - box-drag ROI is only valid in
+    a front/back orthographic view (see docs/roi-native-selection-plan.md),
+    since screen XY must equal model XY for the Z-unbounded-prism test to
+    make sense."""
+
+    scope_id: str
+    drag_rect_xy: Tuple[float, float, float, float]  # (x_min, x_max, y_min, y_max), model coords
+    view: str  # "front_xy" | "back_neg_xy"
+    components: List[ROIComponentClip] = field(default_factory=list)
+
+    @property
+    def face_indices(self) -> List[int]:
+        """Flattened face_indices across every clipped component - the
+        roi_face_indices shape engine.py/roi.py already expect."""
+        result: List[int] = []
+        for component in self.components:
+            result.extend(component.face_indices)
+        return result
+
+
+@dataclass
+class ROIPointSelection:
+    """Fallback ROI input path (see docs/roi-native-selection-plan.md) for
+    when box-drag selection itself is unreliable - a directly-specified
+    coordinate resolved to its nearest face."""
+
+    coordinate: Vec3
+    face_index: Optional[int]
+    component_id: Optional[int] = None
+    note: str = ""
+
+
 def fresh_run_id(prefix: str = "run") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:12]}"
 

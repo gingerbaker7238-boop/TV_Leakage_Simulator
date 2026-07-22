@@ -49,6 +49,18 @@ python run.py --rays 4000 --max-depth 2 --seed 42 --output outputs
   - 웹 UI를 별도 브라우저 없이 내장 WebView 창에서 실행
 - 관련 문서: `docs/desktop-exe-packaging.md`
 
+경량 STEP/STP 배포본 생성:
+
+```powershell
+.\build_lightweight_desktop.bat
+```
+
+- 출력: `release/leakage_simulator_desktop_v0.9.11_lite/`
+- 전달용 ZIP: `release/leakage_simulator_desktop_v0.9.11_lite.zip`
+- 사용자는 압축 해제 후 `LeakageSimulator.exe`만 더블클릭
+- STEP/STP import, 현재 Web UI, RT-2C 반사/산란, PERF-1, PERF-2 BVH 포함
+- X_T 직접 import와 legacy matplotlib PNG export는 경량판 범위에서 제외
+
 ## 저장소 구조
 - `src/leakage_simulator/`
   - 코어 엔진, CAD import, ROI, gap, ray tracing, 렌더링

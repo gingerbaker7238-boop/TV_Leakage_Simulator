@@ -4,28 +4,104 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
-from .geometry import TriangleMesh
+from .geometry import (
+    TriangleMesh,
+    choose_adaptive_subdivision_area_mm2,
+    subdivide_flat_mesh,
+)
 from .materials import default_material_library
 from .synth import generate_synthetic_leakage_scene
 from .types import EmitterConfig
 
-try:
-    import cadquery as cq
-except Exception:  # pragma: no cover - optional dependency
-    cq = None
+cq = None
+_cadquery_checked = False
+BRep_Tool = None
+BRepMesh_IncrementalMesh = None
+IFSelect_RetDone = None
+STEPControl_Reader = None
+TopAbs_FACE = None
+TopAbs_SOLID = None
+TopExp_Explorer = None
+TopLoc_Location = None
+TopoDS = None
+ocp_available = None
 
-try:
-    from OCP.BRep import BRep_Tool
-    from OCP.BRepMesh import BRepMesh_IncrementalMesh
-    from OCP.IFSelect import IFSelect_RetDone
-    from OCP.STEPControl import STEPControl_Reader
-    from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
-    from OCP.TopExp import TopExp_Explorer
-    from OCP.TopLoc import TopLoc_Location
-    from OCP.TopoDS import TopoDS
-    ocp_available = True
-except Exception:  # pragma: no cover - optional dependency
-    ocp_available = False
+# STEP tessellation can leave flat panels as only one or two huge triangles.
+# Size-aware post-tessellation gives ROI picking fine spatial resolution
+# without imposing a fixed physical area on every CAD model.
+ROI_SUBDIVISION_TARGET_DIVISIONS = 512
+ROI_SUBDIVISION_MIN_EDGE_MM = 0.5
+ROI_SUBDIVISION_MAX_EDGE_MM = 3.0
+ROI_SUBDIVISION_MAX_FACES = 750_000
+ROI_SUBDIVISION_MAX_DEPTH = 9
+
+
+def _ensure_cadquery_available() -> bool:
+    global cq, _cadquery_checked
+    if _cadquery_checked:
+        return cq is not None
+    _cadquery_checked = True
+    try:
+        import cadquery as cadquery_module
+
+        cq = cadquery_module
+    except Exception:  # pragma: no cover - optional dependency
+        cq = None
+    return cq is not None
+
+
+def _ensure_ocp_available() -> bool:
+    global BRep_Tool
+    global BRepMesh_IncrementalMesh
+    global IFSelect_RetDone
+    global STEPControl_Reader
+    global TopAbs_FACE
+    global TopAbs_SOLID
+    global TopExp_Explorer
+    global TopLoc_Location
+    global TopoDS
+    global ocp_available
+
+    if ocp_available is not None:
+        return ocp_available
+    try:
+        from OCP.BRep import BRep_Tool as ocp_brep_tool
+        from OCP.BRepMesh import BRepMesh_IncrementalMesh as ocp_mesh_builder
+        from OCP.IFSelect import IFSelect_RetDone as ocp_read_done
+        from OCP.STEPControl import STEPControl_Reader as ocp_step_reader
+        from OCP.TopAbs import TopAbs_FACE as ocp_face_type, TopAbs_SOLID as ocp_solid_type
+        from OCP.TopExp import TopExp_Explorer as ocp_explorer
+        from OCP.TopLoc import TopLoc_Location as ocp_location
+        from OCP.TopoDS import TopoDS as ocp_topods
+
+        BRep_Tool = ocp_brep_tool
+        BRepMesh_IncrementalMesh = ocp_mesh_builder
+        IFSelect_RetDone = ocp_read_done
+        STEPControl_Reader = ocp_step_reader
+        TopAbs_FACE = ocp_face_type
+        TopAbs_SOLID = ocp_solid_type
+        TopExp_Explorer = ocp_explorer
+        TopLoc_Location = ocp_location
+        TopoDS = ocp_topods
+        ocp_available = True
+    except Exception:  # pragma: no cover - optional dependency
+        ocp_available = False
+    return ocp_available
+
+
+def _subdivide_step_mesh(mesh: TriangleMesh) -> Tuple[TriangleMesh, float]:
+    target_area = choose_adaptive_subdivision_area_mm2(
+        mesh,
+        target_divisions_across_diagonal=ROI_SUBDIVISION_TARGET_DIVISIONS,
+        min_target_edge_mm=ROI_SUBDIVISION_MIN_EDGE_MM,
+        max_target_edge_mm=ROI_SUBDIVISION_MAX_EDGE_MM,
+        max_output_faces=ROI_SUBDIVISION_MAX_FACES,
+        max_depth=ROI_SUBDIVISION_MAX_DEPTH,
+    )
+    return (
+        subdivide_flat_mesh(mesh, target_area, max_depth=ROI_SUBDIVISION_MAX_DEPTH),
+        target_area,
+    )
 
 
 @dataclass
@@ -176,12 +252,12 @@ def _import_stl_ascii(path: Path) -> ImportResult:
 
 
 def _import_step(path: Path) -> ImportResult:
-    if ocp_available:
+    if _ensure_ocp_available():
         try:
             return _import_step_ocp(path)
         except Exception:
             pass
-    if cq is None:
+    if not _ensure_cadquery_available():
         mesh, emitters, receiver = generate_synthetic_leakage_scene()
         return ImportResult(
             mesh=mesh,
@@ -223,13 +299,17 @@ def _import_step(path: Path) -> ImportResult:
             note="STEP parsed but tessellation produced no triangles; synthetic fallback used.",
         )
 
+    mesh, target_area = _subdivide_step_mesh(mesh)
     receiver_faces = _guess_receiver_faces(mesh)
     return ImportResult(
         mesh=mesh,
         emitters=emitters,
         receiver_face_indices=receiver_faces,
         synthetic=False,
-        note="STEP parsed with CadQuery and tessellated into triangle mesh.",
+        note=(
+            "STEP parsed with CadQuery and adaptively tessellated "
+            f"(target area {target_area:.4g} mm^2, {len(mesh.faces)} faces)."
+        ),
     )
 
 
@@ -324,6 +404,8 @@ def _import_step_ocp(path: Path) -> ImportResult:
             note="STEP parsed with OCP but tessellation produced no triangles; synthetic fallback used.",
         )
 
+    mesh, target_area = _subdivide_step_mesh(mesh)
+
     guessed_receivers = _guess_receiver_faces(mesh)
     if guessed_receivers:
         receiver_faces = guessed_receivers
@@ -332,7 +414,10 @@ def _import_step_ocp(path: Path) -> ImportResult:
         emitters=emitters,
         receiver_face_indices=receiver_faces,
         synthetic=False,
-        note="STEP parsed with OCP direct reader and tessellated into triangle mesh.",
+        note=(
+            "STEP parsed with OCP and adaptively tessellated "
+            f"(target area {target_area:.4g} mm^2, {len(mesh.faces)} faces)."
+        ),
     )
 
 
