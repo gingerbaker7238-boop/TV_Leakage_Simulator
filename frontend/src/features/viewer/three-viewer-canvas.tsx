@@ -66,6 +66,7 @@ interface ThreeViewerCanvasProps {
 interface ComponentRenderNode {
   center: Vector3
   component: SceneComponent
+  depthPriority: number
   edges: LineSegments<BufferGeometry, LineBasicMaterial>
   group: Group
   materialOverlayRoot: Group
@@ -93,6 +94,9 @@ interface ViewerMaterialStyle {
 const componentPalette = [
   0x64748b, 0x526b7a, 0x475569, 0x5b6473, 0x45606d, 0x667085,
 ]
+
+const wireframeSurfaceOpacity = 0.75
+const selectedWireframeSurfaceOpacity = 0.86
 
 const materialColors: Record<string, number> = {
   black_powder_coated_aluminum: 0x394552,
@@ -257,11 +261,15 @@ function createComponentNode(
     roughness: 0.72,
     flatShading: false,
     side: DoubleSide,
+    polygonOffset: true,
+    polygonOffsetFactor: 1 + index,
+    polygonOffsetUnits: 1 + index,
   })
   const surface = new Mesh(bundle.geometry, surfaceMaterial)
   surface.name = `component-surface-${component.component_id}`
   surface.userData.componentId = component.component_id
   surface.userData.sourceFaceIds = bundle.faceIds
+  surface.renderOrder = index
 
   const featureSegments = scene.mesh.feature_edge_segments.filter(
     (segment) => segment.component_id === component.component_id,
@@ -277,9 +285,11 @@ function createComponentNode(
       transparent: true,
       opacity: 0.72,
       depthTest: true,
+      depthWrite: false,
     }),
   )
   edges.name = `component-edges-${component.component_id}`
+  edges.renderOrder = 100 + index
 
   const materialOverlayRoot = new Group()
   const selectionOverlayRoot = new Group()
@@ -298,6 +308,7 @@ function createComponentNode(
   return {
     center: bundle.center,
     component,
+    depthPriority: index,
     edges,
     group,
     materialOverlayRoot,
@@ -584,10 +595,29 @@ export function ThreeViewerCanvas({
       node.surface.material.emissiveIntensity = isSelected ? 0.72 : 0
       node.surface.material.metalness = style.metalness
       node.surface.material.roughness = style.roughness
-      node.surface.visible = renderMode !== 'Wireframe'
+      const isWireframe = renderMode === 'Wireframe'
+      if (node.surface.material.transparent !== isWireframe) {
+        node.surface.material.transparent = isWireframe
+        node.surface.material.needsUpdate = true
+      }
+      node.surface.material.opacity = isWireframe
+        ? isSelected
+          ? selectedWireframeSurfaceOpacity
+          : wireframeSurfaceOpacity
+        : 1
+      node.surface.material.depthWrite = true
+      node.surface.material.polygonOffsetFactor =
+        1 + node.depthPriority
+      node.surface.material.polygonOffsetUnits =
+        1 + node.depthPriority
+      node.surface.visible = true
       node.edges.visible = renderMode !== 'Surface'
       node.edges.material.color.set(isSelected ? 0x38bdf8 : 0xb9d5e8)
-      node.edges.material.opacity = isSelected ? 1 : 0.72
+      node.edges.material.opacity = isSelected
+        ? 1
+        : isWireframe
+          ? 0.92
+          : 0.72
 
       clearGroup(node.materialOverlayRoot)
       clearGroup(node.transformOverlayRoot)

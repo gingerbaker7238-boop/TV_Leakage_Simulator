@@ -42,6 +42,7 @@ Material assignment와 Transform rule 편집 흐름을 React로 이전했다.
 
 실제 Three.js scene과 component·face picking을 연결하고 Tree 선택·가시성,
 Material·Transform, 카메라와 렌더 모드를 React 상태와 동기화했다.
+중첩 component의 depth 충돌과 Wireframe 반투명 면·edge 안정화도 반영했다.
 
 ## 9. ROI 선택·관리 — 예정
 
