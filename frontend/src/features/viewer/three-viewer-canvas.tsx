@@ -78,11 +78,13 @@ interface ComponentRenderNode {
 interface ViewerRuntime {
   camera: PerspectiveCamera
   controls: OrbitControls
+  grid: GridHelper
   modelRoot: Group
   nodes: Map<number, ComponentRenderNode>
   raycaster: Raycaster
   renderer: WebGLRenderer
   scene: Scene
+  showGrid: boolean
 }
 
 interface ViewerMaterialStyle {
@@ -95,8 +97,12 @@ const componentPalette = [
   0x64748b, 0x526b7a, 0x475569, 0x5b6473, 0x45606d, 0x667085,
 ]
 
-const wireframeSurfaceOpacity = 0.75
-const selectedWireframeSurfaceOpacity = 0.86
+const wireframeSurfaceOpacity = 0.65
+const selectedWireframeSurfaceOpacity = 0.78
+
+function surfaceDepthOffset(depthPriority: number): number {
+  return 2 + depthPriority * 2
+}
 
 const materialColors: Record<string, number> = {
   black_powder_coated_aluminum: 0x394552,
@@ -262,8 +268,8 @@ function createComponentNode(
     flatShading: false,
     side: DoubleSide,
     polygonOffset: true,
-    polygonOffsetFactor: 1 + index,
-    polygonOffsetUnits: 1 + index,
+    polygonOffsetFactor: surfaceDepthOffset(index),
+    polygonOffsetUnits: surfaceDepthOffset(index),
   })
   const surface = new Mesh(bundle.geometry, surfaceMaterial)
   surface.name = `component-surface-${component.component_id}`
@@ -416,11 +422,15 @@ export function ThreeViewerCanvas({
     grid.position.set(
       bounds.center.x,
       bounds.center.y,
-      bounds.center.z - bounds.size.z / 2,
+      bounds.center.z -
+        bounds.size.z / 2 -
+        maxDimension * 0.0125,
     )
     const gridMaterial = grid.material as LineBasicMaterial
     gridMaterial.transparent = true
     gridMaterial.opacity = 0.28
+    gridMaterial.depthWrite = false
+    grid.renderOrder = -100
     threeScene.add(grid)
 
     const axes = new AxesHelper(Math.max(maxDimension * 0.08, 1))
@@ -437,11 +447,13 @@ export function ThreeViewerCanvas({
     const runtime: ViewerRuntime = {
       camera,
       controls,
+      grid,
       modelRoot,
       nodes,
       raycaster: new Raycaster(),
       renderer,
       scene: threeScene,
+      showGrid: false,
     }
     runtimeRef.current = runtime
 
@@ -461,6 +473,8 @@ export function ThreeViewerCanvas({
     let animationFrame = 0
     const animate = () => {
       controls.update()
+      runtime.grid.visible =
+        runtime.showGrid && camera.position.z > grid.position.z
       renderer.render(threeScene, camera)
       animationFrame = window.requestAnimationFrame(animate)
     }
@@ -607,16 +621,16 @@ export function ThreeViewerCanvas({
         : 1
       node.surface.material.depthWrite = true
       node.surface.material.polygonOffsetFactor =
-        1 + node.depthPriority
+        surfaceDepthOffset(node.depthPriority)
       node.surface.material.polygonOffsetUnits =
-        1 + node.depthPriority
+        surfaceDepthOffset(node.depthPriority)
       node.surface.visible = true
       node.edges.visible = renderMode !== 'Surface'
       node.edges.material.color.set(isSelected ? 0x38bdf8 : 0xb9d5e8)
       node.edges.material.opacity = isSelected
         ? 1
         : isWireframe
-          ? 0.92
+          ? 1
           : 0.72
 
       clearGroup(node.materialOverlayRoot)
@@ -712,6 +726,7 @@ export function ThreeViewerCanvas({
         node.selectionOverlayRoot.add(overlay)
       }
     }
+    runtime.showGrid = renderMode !== 'Wireframe'
   }, [
     deletedComponentIds,
     hiddenComponentIds,

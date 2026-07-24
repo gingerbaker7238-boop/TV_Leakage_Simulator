@@ -15,9 +15,13 @@
 ## 수정
 
 - component 순서에 따른 고정 polygon offset을 surface에 적용했다.
-- Wireframe에서도 75% 불투명도의 보조 면과 depth 기록을 유지한다.
+- Wireframe 보조 면의 불투명도를 65%로 조정하고 depth 기록을 유지한다.
 - feature edge는 depth test를 유지하되 depth buffer에는 기록하지 않고,
   surface 뒤에 그려지지 않도록 render order를 고정했다.
+- Wireframe에서는 바닥 격자를 숨기고, 다른 렌더 모드에서도 격자를 모델
+  최저면에서 분리해 아래쪽 시점이나 바닥 면에 모눈이 겹치지 않게 했다.
+- Wireframe feature edge는 불투명하게 그려 alpha blending에 의한
+  미세한 밝기 변화를 줄였다.
 
 ## 영향 범위
 
@@ -33,5 +37,7 @@
 - `npm audit --audit-level=high` — 취약점 0건
 - Chrome에서 문제 STEP(50,944 faces, 4 components) 재검증
   - Surface 중첩면 패턴 제거
-  - Wireframe 반투명 면과 feature edge 표시
-  - 연속 프레임의 가시적 점멸 및 console error 없음
+  - Wireframe 65% 불투명 면과 안정된 feature edge 표시
+  - 모델 내부 및 바닥 면의 격자 비침 제거
+  - 정지 후 연속 8프레임 변화가 최대 4/255, 화면의 0.07% 이하
+  - 가시적 점멸 및 console error·warning 없음
