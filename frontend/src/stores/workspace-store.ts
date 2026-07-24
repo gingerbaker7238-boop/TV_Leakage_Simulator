@@ -41,13 +41,24 @@ export interface ComponentTransformRule {
 }
 
 export type RoiSelectionSource = 'box' | 'point'
-export type RoiView = 'front_xy' | 'back_neg_xy' | 'coordinate'
+export type RoiProjectionPlane = 'xy' | 'yz' | 'zx'
+export type RoiView =
+  | 'front_xy'
+  | 'back_neg_xy'
+  | 'front_yz'
+  | 'back_neg_yz'
+  | 'front_zx'
+  | 'back_neg_zx'
+  | 'coordinate'
 
 export interface RoiClipBox {
+  plane?: RoiProjectionPlane
   xMin: number
   xMax: number
   yMin: number
   yMax: number
+  zMin?: number
+  zMax?: number
 }
 
 export interface RoiComponentClip {
@@ -199,21 +210,31 @@ function normalizeRoiClipBox(
 ): RoiClipBox | undefined {
   if (!clipBox) return undefined
 
-  const values = [
-    clipBox.xMin,
-    clipBox.xMax,
-    clipBox.yMin,
-    clipBox.yMax,
-  ]
+  const plane = clipBox.plane ?? 'xy'
+  const values =
+    plane === 'xy'
+      ? [clipBox.xMin, clipBox.xMax, clipBox.yMin, clipBox.yMax]
+      : plane === 'yz'
+        ? [clipBox.yMin, clipBox.yMax, clipBox.zMin, clipBox.zMax]
+        : [clipBox.zMin, clipBox.zMax, clipBox.xMin, clipBox.xMax]
   if (values.some((value) => !Number.isFinite(value))) {
     return undefined
   }
 
   return {
+    plane,
     xMin: Math.min(clipBox.xMin, clipBox.xMax),
     xMax: Math.max(clipBox.xMin, clipBox.xMax),
     yMin: Math.min(clipBox.yMin, clipBox.yMax),
     yMax: Math.max(clipBox.yMin, clipBox.yMax),
+    zMin:
+      clipBox.zMin === undefined || clipBox.zMax === undefined
+        ? undefined
+        : Math.min(clipBox.zMin, clipBox.zMax),
+    zMax:
+      clipBox.zMin === undefined || clipBox.zMax === undefined
+        ? undefined
+        : Math.max(clipBox.zMin, clipBox.zMax),
   }
 }
 

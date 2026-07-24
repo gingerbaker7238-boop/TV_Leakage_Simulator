@@ -9,9 +9,9 @@
 
 ## 수정
 
-- ROI 선택 직전의 정규화된 시선 방향과 up vector를 저장한다.
-- 선택 중에만 가까운 XY·-XY 정면으로 정렬하고, 완료·취소·실패 후 저장한
-  방향으로 복원한 다음 결과 bounding box 크기에 맞춰 거리만 조절한다.
+- ROI 선택 직전의 position·target·up vector·near/far를 저장한다.
+- 선택 중에만 가장 가까운 `±XY`·`±YZ`·`±ZX` 정면으로 정렬하고,
+  완료·취소·실패 후 저장한 전체 pose를 `Fit` 없이 그대로 복원한다.
 - `Fit`은 기존 up vector를 유지해 TrackballControls의 자유 회전을
   방해하지 않는다.
 - 절단 surface·section cap을 flat shading으로 렌더링한다.
@@ -24,7 +24,7 @@
 
 - 실제 `tv_leakage_roi_left_bottom_no_gap.stp`
   - 50,944 faces, 4 components
-  - 임의 각도 → ROI XY 선택 → 기존 각도 복원 확인
+  - 임의 각도 → ROI 정면 선택 → 기존 위치·target·각도·배율 복원 확인
   - 선택 직후 연속 Trackball 회전 확인
   - 23,967 source faces → 24,863 clipped triangles
   - 10개 section cap, 열린 경계 없이 닫힌 solid 생성

@@ -2,6 +2,7 @@ import type { ScenePayload } from '@/api'
 import type {
   RoiClipBox,
   RoiComponentClip,
+  RoiProjectionPlane,
   RoiScope,
   Vector3Value,
 } from '@/stores'
@@ -10,15 +11,51 @@ type Point2 = readonly [number, number]
 
 const intersectionEpsilon = 1e-9
 
+function roiPlane(box: RoiClipBox): RoiProjectionPlane {
+  return box.plane ?? 'xy'
+}
+
+function roiBoxBounds2d(
+  box: RoiClipBox,
+): [number, number, number, number] {
+  if (roiPlane(box) === 'yz') {
+    return [
+      box.yMin,
+      box.yMax,
+      box.zMin ?? 0,
+      box.zMax ?? 0,
+    ]
+  }
+  if (roiPlane(box) === 'zx') {
+    return [
+      box.zMin ?? 0,
+      box.zMax ?? 0,
+      box.xMin,
+      box.xMax,
+    ]
+  }
+  return [box.xMin, box.xMax, box.yMin, box.yMax]
+}
+
+function projectVertexToRoiPlane(
+  vertex: readonly [number, number, number],
+  plane: RoiProjectionPlane,
+): Point2 {
+  if (plane === 'yz') return [vertex[1], vertex[2]]
+  if (plane === 'zx') return [vertex[2], vertex[0]]
+  return [vertex[0], vertex[1]]
+}
+
 function pointInBox(
   point: Point2,
   box: RoiClipBox,
 ): boolean {
+  const [uMin, uMax, vMin, vMax] = roiBoxBounds2d(box)
   return (
-    point[0] >= box.xMin - intersectionEpsilon &&
-    point[0] <= box.xMax + intersectionEpsilon &&
-    point[1] >= box.yMin - intersectionEpsilon &&
-    point[1] <= box.yMax + intersectionEpsilon
+    point[0] >= uMin - intersectionEpsilon &&
+    point[0] <= uMax + intersectionEpsilon &&
+    point[1] >= vMin - intersectionEpsilon &&
+    point[1] <= vMax + intersectionEpsilon
   )
 }
 
@@ -91,13 +128,14 @@ export function triangleIntersectsRoiBox(
 ): boolean {
   if (triangle.length !== 3) return false
 
-  const triangleX = triangle.map((point) => point[0])
-  const triangleY = triangle.map((point) => point[1])
+  const [uMin, uMax, vMin, vMax] = roiBoxBounds2d(box)
+  const triangleU = triangle.map((point) => point[0])
+  const triangleV = triangle.map((point) => point[1])
   if (
-    Math.max(...triangleX) < box.xMin ||
-    Math.min(...triangleX) > box.xMax ||
-    Math.max(...triangleY) < box.yMin ||
-    Math.min(...triangleY) > box.yMax
+    Math.max(...triangleU) < uMin ||
+    Math.min(...triangleU) > uMax ||
+    Math.max(...triangleV) < vMin ||
+    Math.min(...triangleV) > vMax
   ) {
     return false
   }
@@ -107,10 +145,10 @@ export function triangleIntersectsRoiBox(
   }
 
   const corners: Point2[] = [
-    [box.xMin, box.yMin],
-    [box.xMax, box.yMin],
-    [box.xMax, box.yMax],
-    [box.xMin, box.yMax],
+    [uMin, vMin],
+    [uMax, vMin],
+    [uMax, vMax],
+    [uMin, vMax],
   ]
   if (corners.some((corner) => pointInTriangle(corner, triangle))) {
     return true
@@ -153,6 +191,7 @@ export function resolveFacesInRoiBox(
     deletedComponentIds,
   )
   const faceIds: number[] = []
+  const plane = roiPlane(box)
 
   scene.mesh.faces.forEach((face, faceId) => {
     const componentId = scene.mesh.face_component_ids[faceId]
@@ -160,7 +199,7 @@ export function resolveFacesInRoiBox(
 
     const triangle: Point2[] = face.map((vertexId) => {
       const vertex = scene.mesh.vertices[vertexId]
-      return [vertex[0], vertex[1]]
+      return projectVertexToRoiPlane(vertex, plane)
     })
     if (triangleIntersectsRoiBox(triangle, box)) {
       faceIds.push(faceId)

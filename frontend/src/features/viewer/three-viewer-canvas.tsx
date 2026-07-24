@@ -47,7 +47,10 @@ import {
   workspaceSelectors,
   type ComponentTransformRule,
   type MaterialAssignment,
+  type RoiClipBox,
+  type RoiProjectionPlane,
   type RoiScope,
+  type RoiView,
 } from '@/stores'
 
 import {
@@ -57,20 +60,24 @@ import {
   getSceneBounds,
 } from './scene-geometry'
 
-export type ViewerCameraPreset = 'Fit' | 'Iso' | 'XY' | '-XY'
+export type ViewerCameraPreset =
+  | 'Fit'
+  | 'Iso'
+  | 'XY'
+  | '-XY'
+  | 'YZ'
+  | '-YZ'
+  | 'ZX'
+  | '-ZX'
+type RoiCameraPreset = Exclude<ViewerCameraPreset, 'Fit' | 'Iso'>
 export type ViewerRenderMode =
   | 'Wireframe'
   | 'Surface'
   | 'Surface + Edge'
 
 export interface RoiBoxSelectionResult {
-  clipBox: {
-    xMin: number
-    xMax: number
-    yMin: number
-    yMax: number
-  }
-  view: 'front_xy' | 'back_neg_xy'
+  clipBox: RoiClipBox
+  view: RoiView
 }
 
 interface ThreeViewerCanvasProps {
@@ -107,12 +114,20 @@ interface ViewerRuntime {
   nodes: Map<number, ComponentRenderNode>
   raycaster: Raycaster
   renderer: WebGLRenderer
-  roiSelectionCameraUp: Vector3 | null
-  roiSelectionViewDirection: Vector3 | null
+  roiSelectionCameraPose: CameraPose | null
+  roiSelectionPreset: RoiCameraPreset | null
   roiPreviewKey: string
   roiPreviewRoot: Group
   scene: Scene
   showGrid: boolean
+}
+
+interface CameraPose {
+  far: number
+  near: number
+  position: Vector3
+  target: Vector3
+  up: Vector3
 }
 
 interface ViewerMaterialStyle {
@@ -134,6 +149,72 @@ const componentPalette = [
 
 const wireframeSurfaceOpacity = 0.65
 const selectedWireframeSurfaceOpacity = 0.78
+
+const roiCameraPresetConfig: Record<
+  RoiCameraPreset,
+  {
+    direction: Vector3
+    plane: RoiProjectionPlane
+    up: Vector3
+    view: Exclude<RoiView, 'coordinate'>
+  }
+> = {
+  XY: {
+    direction: new Vector3(0, 0, 1),
+    plane: 'xy',
+    up: new Vector3(0, 1, 0),
+    view: 'front_xy',
+  },
+  '-XY': {
+    direction: new Vector3(0, 0, -1),
+    plane: 'xy',
+    up: new Vector3(0, -1, 0),
+    view: 'back_neg_xy',
+  },
+  YZ: {
+    direction: new Vector3(1, 0, 0),
+    plane: 'yz',
+    up: new Vector3(0, 0, 1),
+    view: 'front_yz',
+  },
+  '-YZ': {
+    direction: new Vector3(-1, 0, 0),
+    plane: 'yz',
+    up: new Vector3(0, 0, 1),
+    view: 'back_neg_yz',
+  },
+  ZX: {
+    direction: new Vector3(0, 1, 0),
+    plane: 'zx',
+    up: new Vector3(0, 0, 1),
+    view: 'front_zx',
+  },
+  '-ZX': {
+    direction: new Vector3(0, -1, 0),
+    plane: 'zx',
+    up: new Vector3(0, 0, 1),
+    view: 'back_neg_zx',
+  },
+}
+
+function nearestRoiCameraPreset(runtime: ViewerRuntime): RoiCameraPreset {
+  const cameraDirection = runtime.camera.position
+    .clone()
+    .sub(runtime.controls.target)
+    .normalize()
+  let nearest: RoiCameraPreset = 'XY'
+  let nearestDot = -Infinity
+  for (const [preset, config] of Object.entries(
+    roiCameraPresetConfig,
+  ) as [RoiCameraPreset, (typeof roiCameraPresetConfig)[RoiCameraPreset]][]) {
+    const dot = cameraDirection.dot(config.direction)
+    if (dot > nearestDot) {
+      nearest = preset
+      nearestDot = dot
+    }
+  }
+  return nearest
+}
 
 function surfaceDepthUnits(depthPriority: number): number {
   return 4 + depthPriority * 4
@@ -365,18 +446,12 @@ function fitCamera(
     if (direction.lengthSq() < 0.01) {
       direction.set(1, -1, 0.78)
     }
-  } else if (preset === 'XY') {
-    direction.set(0, 0, 1)
-  } else if (preset === '-XY') {
-    direction.set(0, 0, -1)
-  }
-
-  if (preset === 'XY') {
-    runtime.camera.up.set(0, 1, 0)
-  } else if (preset === '-XY') {
-    runtime.camera.up.set(0, -1, 0)
   } else if (preset === 'Iso') {
     runtime.camera.up.set(0, 0, 1)
+  } else {
+    const config = roiCameraPresetConfig[preset]
+    direction.copy(config.direction)
+    runtime.camera.up.copy(config.up)
   }
 
   runtime.camera.position
@@ -392,21 +467,18 @@ function fitCamera(
 function restoreRoiSelectionCameraPose(
   runtime: ViewerRuntime,
 ): boolean {
-  const direction = runtime.roiSelectionViewDirection
-  const up = runtime.roiSelectionCameraUp
-  if (!direction || !up) return false
+  const pose = runtime.roiSelectionCameraPose
+  if (!pose) return false
 
-  const distance = Math.max(
-    runtime.camera.position.distanceTo(runtime.controls.target),
-    1,
-  )
-  runtime.camera.up.copy(up)
-  runtime.camera.position
-    .copy(runtime.controls.target)
-    .add(direction.clone().multiplyScalar(distance))
+  runtime.camera.position.copy(pose.position)
+  runtime.camera.up.copy(pose.up)
+  runtime.camera.near = pose.near
+  runtime.camera.far = pose.far
+  runtime.camera.updateProjectionMatrix()
+  runtime.controls.target.copy(pose.target)
   runtime.controls.update()
-  runtime.roiSelectionViewDirection = null
-  runtime.roiSelectionCameraUp = null
+  runtime.roiSelectionCameraPose = null
+  runtime.roiSelectionPreset = null
   return true
 }
 
@@ -634,8 +706,8 @@ export function ThreeViewerCanvas({
       nodes,
       raycaster: new Raycaster(),
       renderer,
-      roiSelectionCameraUp: null,
-      roiSelectionViewDirection: null,
+      roiSelectionCameraPose: null,
+      roiSelectionPreset: null,
       roiPreviewKey: '',
       roiPreviewRoot,
       scene: threeScene,
@@ -749,19 +821,47 @@ export function ThreeViewerCanvas({
       }
 
       if (points.length !== 4) return null
+      const preset = runtime.roiSelectionPreset
+      if (!preset) return null
+      const config = roiCameraPresetConfig[preset]
       const xValues = points.map((point) => point.x)
       const yValues = points.map((point) => point.y)
+      const zValues = points.map((point) => point.z)
+      const modelMinimum = bounds.center
+        .clone()
+        .sub(bounds.size.clone().multiplyScalar(0.5))
+      const modelMaximum = bounds.center
+        .clone()
+        .add(bounds.size.clone().multiplyScalar(0.5))
       return {
         clipBox: {
-          xMin: Math.min(...xValues),
-          xMax: Math.max(...xValues),
-          yMin: Math.min(...yValues),
-          yMax: Math.max(...yValues),
+          plane: config.plane,
+          xMin:
+            config.plane === 'yz'
+              ? modelMinimum.x
+              : Math.min(...xValues),
+          xMax:
+            config.plane === 'yz'
+              ? modelMaximum.x
+              : Math.max(...xValues),
+          yMin:
+            config.plane === 'zx'
+              ? modelMinimum.y
+              : Math.min(...yValues),
+          yMax:
+            config.plane === 'zx'
+              ? modelMaximum.y
+              : Math.max(...yValues),
+          zMin:
+            config.plane === 'xy'
+              ? modelMinimum.z
+              : Math.min(...zValues),
+          zMax:
+            config.plane === 'xy'
+              ? modelMaximum.z
+              : Math.max(...zValues),
         },
-        view:
-          camera.position.z < controls.target.z
-            ? 'back_neg_xy'
-            : 'front_xy',
+        view: config.view,
       }
     }
 
@@ -938,21 +1038,20 @@ export function ThreeViewerCanvas({
 
     runtime.controls.noRotate = roiBoxSelectionArmed
     if (roiBoxSelectionArmed) {
-      if (!runtime.roiSelectionViewDirection) {
-        runtime.roiSelectionViewDirection = runtime.camera.position
-          .clone()
-          .sub(runtime.controls.target)
-          .normalize()
-        runtime.roiSelectionCameraUp = runtime.camera.up
-          .clone()
-          .normalize()
+      if (!runtime.roiSelectionCameraPose) {
+        runtime.roiSelectionCameraPose = {
+          far: runtime.camera.far,
+          near: runtime.camera.near,
+          position: runtime.camera.position.clone(),
+          target: runtime.controls.target.clone(),
+          up: runtime.camera.up.clone(),
+        }
+        runtime.roiSelectionPreset = nearestRoiCameraPreset(runtime)
       }
       runtime.roiPreviewRoot.visible = false
       runtime.modelRoot.visible = true
       const preset =
-        runtime.camera.position.z < runtime.controls.target.z
-          ? '-XY'
-          : 'XY'
+        runtime.roiSelectionPreset ?? nearestRoiCameraPreset(runtime)
       fitCamera(runtime, preset)
       onStatusMessage(
         `ROI 박스 선택 · ${preset} view · 왼쪽 드래그로 범위를 지정하세요.`,
@@ -983,6 +1082,7 @@ export function ThreeViewerCanvas({
     })
 
     if (showRoiPreview && runtime.roiPreviewKey !== previewKey) {
+      const shouldInitialFit = runtime.roiPreviewKey.length === 0
       clearGroup(runtime.roiPreviewRoot)
       const boxFaceIds = [
         ...new Set(
@@ -1104,8 +1204,12 @@ export function ThreeViewerCanvas({
         runtime.roiPreviewRoot.visible = true
         runtime.modelRoot.visible = false
         runtime.roiPreviewKey = previewKey
-        restoreRoiSelectionCameraPose(runtime)
-        fitCamera(runtime, 'Fit')
+        if (
+          !restoreRoiSelectionCameraPose(runtime) &&
+          shouldInitialFit
+        ) {
+          fitCamera(runtime, 'Fit')
+        }
         onStatusMessage(
           `ROI isolated solid · ${clipped.clippedTriangleCount.toLocaleString()} triangles · ${clipped.capLoopCount} section caps`,
         )
@@ -1119,7 +1223,6 @@ export function ThreeViewerCanvas({
         runtime.modelRoot.visible = true
         runtime.roiPreviewKey = previewKey
         restoreRoiSelectionCameraPose(runtime)
-        fitCamera(runtime, 'Fit')
         onStatusMessage(
           clipped
             ? `ROI section cap 무결성 오류 · 열린 경계 ${clipped.openChainCount}개`
@@ -1132,17 +1235,12 @@ export function ThreeViewerCanvas({
     ) {
       runtime.roiPreviewRoot.visible = true
       runtime.modelRoot.visible = false
-      if (restoreRoiSelectionCameraPose(runtime)) {
-        fitCamera(runtime, 'Fit')
-      }
+      restoreRoiSelectionCameraPose(runtime)
     } else if (!showRoiPreview) {
       runtime.roiPreviewRoot.visible = false
       runtime.modelRoot.visible = true
-      if (
-        !roiBoxSelectionArmed &&
+      if (!roiBoxSelectionArmed) {
         restoreRoiSelectionCameraPose(runtime)
-      ) {
-        fitCamera(runtime, 'Fit')
       }
     }
 

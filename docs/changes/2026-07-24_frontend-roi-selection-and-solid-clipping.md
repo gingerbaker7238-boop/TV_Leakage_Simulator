@@ -13,8 +13,8 @@
 
 - 기존 `run_web.py`에서 검증된 ROI clipping·section cap 알고리즘을
   TypeScript/Three.js 모듈로 이식했다.
-- Sutherland-Hodgman 방식으로 원본 triangle을 `xMin`, `xMax`,
-  `yMin`, `yMax` 평면에서 순서대로 절단한다.
+- Sutherland-Hodgman 방식으로 원본 triangle을 XY·YZ·ZX 중 선택한
+  투영 평면의 두 축, 네 경계에서 순서대로 절단한다.
 - 절단 교차점은 component·좌표 기준으로 병합해 곧은 경계와 새로운
   vertex를 생성한다.
 - 절단 경계 edge를 component·box·plane별로 모으고 T-junction을
@@ -29,10 +29,10 @@
   선택할 수 있게 한다.
 - 좌표 입력, 다중 scope 활성화, Hide/Delete component 제외와
   `face_id[]` 분석 계약은 유지한다.
-- ROI 박스 선택 전에 카메라의 시선 방향과 up vector를 저장하고,
-  선택 완료·취소·무결성 실패 시 같은 방향으로 복원한 뒤 결과 크기만
-  `Fit`한다.
-- `Fit`은 현재 up vector를 덮어쓰지 않으며 XY·-XY·Iso 프리셋만
+- ROI 박스 선택 전에 카메라 position·target·up vector·near/far를
+  저장하고, 선택 완료·취소·무결성 실패 시 `Fit` 없이 같은 화면으로
+  정확히 복원한다.
+- `Fit`은 현재 up vector를 덮어쓰지 않으며 Iso와 여섯 정면 프리셋만
   각 프리셋의 안정적인 up vector를 설정한다.
 - 절단 surface와 cap은 flat shading을 사용하고, Wireframe 면은
   조명과 무관한 `MeshBasicMaterial`로 분리했다.
@@ -53,10 +53,15 @@
   - Surface + Edge와 Wireframe에서 직선 경계와 채워진 절단면 확인
 - ROI scope 비활성화 시 Full CAD 복귀, 재활성화 시 격리 ROI 복원
 - 실제 TV STEP 재선택 회귀:
-  - 임의 회전 시점에서 ROI 선택 중 XY 정렬 후 원래 시선 방향 복원
+  - 임의 회전 시점에서 ROI 선택 중 가장 가까운 정면 정렬 후 전체 pose 복원
   - 선택 직후 Trackball 자유 회전 정상
   - 23,967 source faces → 24,863 clipped triangles
   - section cap 10개, Surface·Surface + Edge·Wireframe 경계 안정
+- 다축 실제 TV STEP 회귀:
+  - `front_yz`: 23,750 faces → 24,381 triangles, cap 8개
+  - `front_zx`: 28,613 faces → 29,343 triangles, cap 8개
+  - `back_neg_yz`: 22,896 faces → 23,523 triangles, cap 8개
+  - `back_neg_zx`: 20,917 faces → 21,584 triangles, cap 9개
 - 브라우저 console error·warning 없음
 - `npm run typecheck`
 - `npm run lint`

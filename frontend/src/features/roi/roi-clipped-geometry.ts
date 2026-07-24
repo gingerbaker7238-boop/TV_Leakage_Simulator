@@ -7,10 +7,21 @@ import {
 } from 'three'
 
 import type { ScenePayload } from '@/api'
-import type { RoiClipBox } from '@/stores'
+import type {
+  RoiClipBox,
+  RoiProjectionPlane,
+} from '@/stores'
 
 type Point3 = [number, number, number]
-type PlaneName = 'xMin' | 'xMax' | 'yMin' | 'yMax'
+type AxisIndex = 0 | 1 | 2
+type AxisName = 'x' | 'y' | 'z'
+type PlaneName =
+  | 'xMin'
+  | 'xMax'
+  | 'yMin'
+  | 'yMax'
+  | 'zMin'
+  | 'zMax'
 
 interface TriangleRecord {
   a: number
@@ -45,30 +56,89 @@ export interface RoiClippedGeometryBundle {
   clippedVertexCount: number
 }
 
+function roiPlane(box: RoiClipBox): RoiProjectionPlane {
+  return box.plane ?? 'xy'
+}
+
+function planeAxes(plane: RoiProjectionPlane): [AxisIndex, AxisIndex] {
+  if (plane === 'yz') return [1, 2]
+  if (plane === 'zx') return [2, 0]
+  return [0, 1]
+}
+
+function axisName(axisIndex: AxisIndex): AxisName {
+  return (['x', 'y', 'z'] as const)[axisIndex]
+}
+
+function axisBounds(
+  box: RoiClipBox,
+  axisIndex: AxisIndex,
+): [number, number] {
+  if (axisIndex === 0) return [box.xMin, box.xMax]
+  if (axisIndex === 1) return [box.yMin, box.yMax]
+  return [box.zMin ?? 0, box.zMax ?? 0]
+}
+
+function planeAxisIndex(planeName: PlaneName): AxisIndex {
+  if (planeName.startsWith('x')) return 0
+  if (planeName.startsWith('y')) return 1
+  return 2
+}
+
+function planeBoundary(
+  box: RoiClipBox,
+  planeName: PlaneName,
+): number {
+  const [minimum, maximum] = axisBounds(
+    box,
+    planeAxisIndex(planeName),
+  )
+  return planeName.endsWith('Min') ? minimum : maximum
+}
+
+function clipPlaneNames(box: RoiClipBox): PlaneName[] {
+  return planeAxes(roiPlane(box)).flatMap((axisIndex) => {
+    const axis = axisName(axisIndex)
+    return [`${axis}Min`, `${axis}Max`] as PlaneName[]
+  })
+}
+
 export function normalizeRoiClipBoxes(
   boxes: RoiClipBox[],
 ): RoiClipBox[] {
   return boxes
-    .map((box) => ({
-      xMin: Number(box.xMin),
-      xMax: Number(box.xMax),
-      yMin: Number(box.yMin),
-      yMax: Number(box.yMax),
-    }))
-    .filter(
-      (box) =>
-        Number.isFinite(box.xMin) &&
-        Number.isFinite(box.xMax) &&
-        Number.isFinite(box.yMin) &&
-        Number.isFinite(box.yMax) &&
-        box.xMax > box.xMin &&
-        box.yMax > box.yMin,
-    )
+    .map((box) => {
+      const plane = roiPlane(box)
+      return {
+        plane,
+        xMin: Number(box.xMin),
+        xMax: Number(box.xMax),
+        yMin: Number(box.yMin),
+        yMax: Number(box.yMax),
+        zMin:
+          box.zMin === undefined ? undefined : Number(box.zMin),
+        zMax:
+          box.zMax === undefined ? undefined : Number(box.zMax),
+      }
+    })
+    .filter((box) => {
+      const [firstAxis, secondAxis] = planeAxes(
+        box.plane ?? 'xy',
+      )
+      return [firstAxis, secondAxis].every((axisIndex) => {
+        const [minimum, maximum] = axisBounds(box, axisIndex)
+        return (
+          Number.isFinite(minimum) &&
+          Number.isFinite(maximum) &&
+          maximum > minimum
+        )
+      })
+    })
 }
 
 function clipPolygonAgainstPlane(
   points: Point3[],
-  axisIndex: 0 | 1,
+  axisIndex: AxisIndex,
   boundary: number,
   keepGreater: boolean,
 ): Point3[] {
@@ -136,30 +206,21 @@ export function clipTriangleToRoiBox(
   box: RoiClipBox,
 ): Point3[] {
   let polygon = points
-  polygon = clipPolygonAgainstPlane(
-    polygon,
-    0,
-    box.xMin,
-    true,
-  )
-  polygon = clipPolygonAgainstPlane(
-    polygon,
-    0,
-    box.xMax,
-    false,
-  )
-  polygon = clipPolygonAgainstPlane(
-    polygon,
-    1,
-    box.yMin,
-    true,
-  )
-  polygon = clipPolygonAgainstPlane(
-    polygon,
-    1,
-    box.yMax,
-    false,
-  )
+  for (const axisIndex of planeAxes(roiPlane(box))) {
+    const [minimum, maximum] = axisBounds(box, axisIndex)
+    polygon = clipPolygonAgainstPlane(
+      polygon,
+      axisIndex,
+      minimum,
+      true,
+    )
+    polygon = clipPolygonAgainstPlane(
+      polygon,
+      axisIndex,
+      maximum,
+      false,
+    )
+  }
   return polygon
 }
 
@@ -238,11 +299,12 @@ function appendClipCap(
   const points = cleanLoop.map((vertexIndex) =>
     flatPosition(surfacePositions, vertexIndex),
   )
-  const contour = points.map((point) =>
-    planeName === 'xMin' || planeName === 'xMax'
-      ? new Vector2(point.y, point.z)
-      : new Vector2(point.x, point.z),
-  )
+  const planeAxis = planeAxisIndex(planeName)
+  const contour = points.map((point) => {
+    if (planeAxis === 0) return new Vector2(point.y, point.z)
+    if (planeAxis === 1) return new Vector2(point.x, point.z)
+    return new Vector2(point.x, point.y)
+  })
   const triangles = ShapeUtils.triangulateShape(contour, [])
   if (triangles.length === 0) return false
   const baseIndex = capPositions.length / 3
@@ -349,20 +411,20 @@ function closeCapEdgeChains(
 
   const boundaryGroups = new Map<PlaneName, number[]>()
   const remaining = new Set(endpoints)
+  const primaryAxis = planeAxisIndex(planeName)
+  const companionPlanes = clipPlaneNames(box).filter(
+    (candidate) => planeAxisIndex(candidate) !== primaryAxis,
+  )
   for (const vertexId of endpoints) {
     const point = flatPosition(positions, vertexId)
-    let boundaryName: PlaneName | null = null
-    if (planeName === 'xMin' || planeName === 'xMax') {
-      if (Math.abs(point.y - box.yMin) <= tolerance) {
-        boundaryName = 'yMin'
-      } else if (Math.abs(point.y - box.yMax) <= tolerance) {
-        boundaryName = 'yMax'
-      }
-    } else if (Math.abs(point.x - box.xMin) <= tolerance) {
-      boundaryName = 'xMin'
-    } else if (Math.abs(point.x - box.xMax) <= tolerance) {
-      boundaryName = 'xMax'
-    }
+    const boundaryName =
+      companionPlanes.find(
+        (candidate) =>
+          Math.abs(
+            point.getComponent(planeAxisIndex(candidate)) -
+              planeBoundary(box, candidate),
+          ) <= tolerance,
+      ) ?? null
     if (!boundaryName) continue
     const members = boundaryGroups.get(boundaryName) ?? []
     members.push(vertexId)
@@ -429,12 +491,15 @@ function clipFeatureSegment(
   ]
   let enter = 0
   let leave = 1
-  const constraints = [
-    [-delta[0], start[0] - box.xMin],
-    [delta[0], box.xMax - start[0]],
-    [-delta[1], start[1] - box.yMin],
-    [delta[1], box.yMax - start[1]],
-  ]
+  const constraints = planeAxes(roiPlane(box)).flatMap(
+    (axisIndex) => {
+      const [minimum, maximum] = axisBounds(box, axisIndex)
+      return [
+        [-delta[axisIndex], start[axisIndex] - minimum],
+        [delta[axisIndex], maximum - start[axisIndex]],
+      ]
+    },
+  )
   for (const [direction, distance] of constraints) {
     if (Math.abs(direction) < 1e-12) {
       if (distance < 0) return null
@@ -622,34 +687,26 @@ export function buildRoiClippedGeometries(
     const box = clipBoxes[edge.boxIndex]
     const first = flatPosition(positions, edge.a)
     const second = flatPosition(positions, edge.b)
+    const activeAxes = planeAxes(roiPlane(box))
     const tolerance =
       Math.max(
-        box.xMax - box.xMin,
-        box.yMax - box.yMin,
+        ...activeAxes.map((axisIndex) => {
+          const [minimum, maximum] = axisBounds(box, axisIndex)
+          return maximum - minimum
+        }),
         1,
       ) * 1e-6
-    let planeName: PlaneName | null = null
-    if (
-      Math.abs(first.x - box.xMin) <= tolerance &&
-      Math.abs(second.x - box.xMin) <= tolerance
-    ) {
-      planeName = 'xMin'
-    } else if (
-      Math.abs(first.x - box.xMax) <= tolerance &&
-      Math.abs(second.x - box.xMax) <= tolerance
-    ) {
-      planeName = 'xMax'
-    } else if (
-      Math.abs(first.y - box.yMin) <= tolerance &&
-      Math.abs(second.y - box.yMin) <= tolerance
-    ) {
-      planeName = 'yMin'
-    } else if (
-      Math.abs(first.y - box.yMax) <= tolerance &&
-      Math.abs(second.y - box.yMax) <= tolerance
-    ) {
-      planeName = 'yMax'
-    }
+    const planeName =
+      clipPlaneNames(box).find((candidate) => {
+        const axisIndex = planeAxisIndex(candidate)
+        const boundary = planeBoundary(box, candidate)
+        return (
+          Math.abs(first.getComponent(axisIndex) - boundary) <=
+            tolerance &&
+          Math.abs(second.getComponent(axisIndex) - boundary) <=
+            tolerance
+        )
+      }) ?? null
     if (!planeName) continue
     const key = `${edge.boxIndex}:${edge.componentId}:${planeName}`
     const group = planeGroups.get(key) ?? {

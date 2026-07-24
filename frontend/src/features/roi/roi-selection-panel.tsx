@@ -143,8 +143,9 @@ export function RoiSelectionPanel({
           <div className="min-w-0">
             <div className="text-xs font-semibold">박스 드래그</div>
             <p className="mt-1 text-[0.68rem] leading-5 text-muted-foreground">
-              보이는 컴포넌트만 대상으로 정면 XY 범위를 선택합니다. Z
-              방향은 제한하지 않습니다.
+              보이는 컴포넌트만 대상으로 현재 카메라와 가장 가까운
+              ±XY·±YZ·±ZX 정면 범위를 선택합니다. 화면 깊이 방향은
+              제한하지 않습니다.
             </p>
           </div>
         </div>
@@ -165,8 +166,9 @@ export function RoiSelectionPanel({
         </Button>
         {roiBoxSelectionArmed ? (
           <p className="mt-2 text-[0.66rem] leading-5 text-primary">
-            Viewer가 가까운 XY/-XY 방향으로 정렬되었습니다. 왼쪽
-            버튼을 누른 채 영역을 그리세요.
+            Viewer가 가장 가까운 ±XY·±YZ·±ZX 방향으로
+            정렬되었습니다. 왼쪽 버튼을 누른 채 영역을 그리세요.
+            완료하면 선택 전 카메라 화면으로 정확히 돌아갑니다.
           </p>
         ) : null}
       </div>

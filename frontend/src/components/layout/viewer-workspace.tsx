@@ -37,6 +37,10 @@ const cameraPresets: ViewerCameraPreset[] = [
   'Iso',
   'XY',
   '-XY',
+  'YZ',
+  '-YZ',
+  'ZX',
+  '-ZX',
 ]
 const renderModes: ViewerRenderMode[] = [
   'Wireframe',
@@ -172,6 +176,7 @@ export function ViewerWorkspace({
                   variant={
                     cameraPreset === preset ? 'secondary' : 'ghost'
                   }
+                  disabled={roiBoxSelectionArmed}
                   aria-pressed={cameraPreset === preset}
                   onClick={() => {
                     setCameraPreset(preset)

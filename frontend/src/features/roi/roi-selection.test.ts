@@ -46,6 +46,33 @@ describe('ROI selection', () => {
     expect(resolveFacesInRoiBox(scene, box, [1])).toEqual([])
   })
 
+  it('projects face selection onto YZ and ZX ROI planes', () => {
+    const scene = createSceneFixture()
+    const yzBox = {
+      plane: 'yz' as const,
+      xMin: 0,
+      xMax: 60,
+      yMin: 4,
+      yMax: 6,
+      zMin: 9,
+      zMax: 11,
+    }
+    const zxBox = {
+      plane: 'zx' as const,
+      xMin: 4,
+      xMax: 6,
+      yMin: 0,
+      yMax: 60,
+      zMin: 9,
+      zMax: 11,
+    }
+
+    expect(resolveFacesInRoiBox(scene, yzBox, [])).toEqual([3, 4])
+    expect(resolveFacesInRoiBox(scene, zxBox, [])).toEqual([
+      1, 2, 3, 4,
+    ])
+  })
+
   it('groups ROI metadata by component and resolves coordinate input', () => {
     const scene = createSceneFixture()
     const components = groupRoiFacesByComponent(
@@ -190,9 +217,69 @@ describe('ROI selection', () => {
     expect(Math.min(...xValues)).toBeCloseTo(0.25)
     expect(Math.max(...xValues)).toBeCloseTo(0.75)
 
+    const yzClipped = buildRoiClippedGeometries(
+      scene,
+      cubeFaces.map((_, index) => index),
+      [
+        {
+          plane: 'yz',
+          xMin: 0,
+          xMax: 1,
+          yMin: 0.25,
+          yMax: 0.75,
+          zMin: -1,
+          zMax: 2,
+        },
+      ],
+    )
+    expect(yzClipped?.openChainCount).toBe(0)
+    expect(yzClipped?.capLoopCount).toBe(2)
+    const yzPositions =
+      yzClipped?.surfaceGeometry.getAttribute('position')
+    const yValues = Array.from(
+      { length: yzPositions?.count ?? 0 },
+      (_, index) => yzPositions?.getY(index) ?? 0,
+    )
+    expect(Math.min(...yValues)).toBeCloseTo(0.25)
+    expect(Math.max(...yValues)).toBeCloseTo(0.75)
+
+    const zxClipped = buildRoiClippedGeometries(
+      scene,
+      cubeFaces.map((_, index) => index),
+      [
+        {
+          plane: 'zx',
+          xMin: -1,
+          xMax: 2,
+          yMin: 0,
+          yMax: 1,
+          zMin: 0.25,
+          zMax: 0.75,
+        },
+      ],
+    )
+    expect(zxClipped?.openChainCount).toBe(0)
+    expect(zxClipped?.capLoopCount).toBe(2)
+    const zxPositions =
+      zxClipped?.surfaceGeometry.getAttribute('position')
+    const zValues = Array.from(
+      { length: zxPositions?.count ?? 0 },
+      (_, index) => zxPositions?.getZ(index) ?? 0,
+    )
+    expect(Math.min(...zValues)).toBeCloseTo(0.25)
+    expect(Math.max(...zValues)).toBeCloseTo(0.75)
+
     clipped?.surfaceGeometry.dispose()
     clipped?.capGeometry?.dispose()
     clipped?.capEdgeGeometry?.dispose()
     clipped?.featureEdgeGeometry?.dispose()
+    yzClipped?.surfaceGeometry.dispose()
+    yzClipped?.capGeometry?.dispose()
+    yzClipped?.capEdgeGeometry?.dispose()
+    yzClipped?.featureEdgeGeometry?.dispose()
+    zxClipped?.surfaceGeometry.dispose()
+    zxClipped?.capGeometry?.dispose()
+    zxClipped?.capEdgeGeometry?.dispose()
+    zxClipped?.featureEdgeGeometry?.dispose()
   })
 })

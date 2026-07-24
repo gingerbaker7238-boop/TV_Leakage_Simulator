@@ -11,6 +11,7 @@ export type {
   MaterialTargetType,
   RoiClipBox,
   RoiComponentClip,
+  RoiProjectionPlane,
   RoiScope,
   RoiScopeInput,
   RoiSelectionSource,
