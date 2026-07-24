@@ -38,10 +38,10 @@ Workflow sidebar와 Viewer workspace를 React 레이아웃으로 옮기고,
 실제 `ScenePayload.components`를 Tree에 연결하고 선택·표시·해석 상태,
 Material assignment와 Transform rule 편집 흐름을 React로 이전했다.
 
-## 8. Three.js Viewer·선택 연동 — 예정
+## 8. Three.js Viewer·선택 연동 — 완료
 
-현재 Viewer slot에 실제 Three.js scene을 연결하고 component·face picking,
-카메라와 렌더 모드를 React 상태와 동기화한다.
+실제 Three.js scene과 component·face picking을 연결하고 Tree 선택·가시성,
+Material·Transform, 카메라와 렌더 모드를 React 상태와 동기화했다.
 
 ## 9. ROI 선택·관리 — 예정
 

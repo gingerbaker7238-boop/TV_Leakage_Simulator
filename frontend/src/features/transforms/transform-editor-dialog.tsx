@@ -301,8 +301,8 @@ export function TransformEditorDialog({
             </div>
           </div>
           <p className="mt-3 text-[0.68rem] leading-4 text-muted-foreground">
-            Rule 상태는 저장되지만 실제 mesh preview 적용은 Three.js Viewer
-            이전 단계에서 연결합니다.
+            적용한 component move·tilt와 local face overlay는 Three.js
+            Viewer에 즉시 반영됩니다.
           </p>
         </section>
       </div>

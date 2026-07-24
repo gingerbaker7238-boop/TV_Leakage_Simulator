@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -14,6 +15,12 @@ import { TransformEditorDialog } from '@/features/transforms'
 import { ViewerWorkspace } from '@/components/layout/viewer-workspace'
 import { workspaceStore } from '@/stores'
 import { createSceneFixture } from '@/test/scene-fixture'
+
+vi.mock('@/features/viewer', () => ({
+  ThreeViewerCanvas: () => (
+    <canvas aria-label="Interactive 3D CAD viewer" />
+  ),
+}))
 
 class ResizeObserverStub {
   observe() {}
@@ -38,29 +45,23 @@ afterEach(() => {
   workspaceStore.getState().actions.resetWorkspace()
 })
 
-describe('Step 07 feature editors', () => {
+describe('Step 07·08 feature editors', () => {
   it('renders ScenePayload components in the Viewer state bridge', async () => {
-    const onEditMaterial = vi.fn()
-    render(
-      <ViewerWorkspace
-        scene={createSceneFixture()}
-        onEditMaterial={onEditMaterial}
-        onEditTransform={vi.fn()}
-        onDeleteComponent={vi.fn()}
-      />,
-    )
-    const target = screen.getByTestId('component-context-target')
+    render(<ViewerWorkspace scene={createSceneFixture()} />)
 
-    fireEvent.click(target)
-    expect(workspaceStore.getState().selectedComponentIds).toEqual([1])
+    expect(
+      await screen.findByLabelText('Interactive 3D CAD viewer'),
+    ).not.toBeNull()
 
-    fireEvent.contextMenu(target)
-    fireEvent.click(
-      await screen.findByRole('menuitem', { name: 'Material' }),
-    )
-    expect(onEditMaterial).toHaveBeenCalledWith(
-      expect.objectContaining({ componentId: 1 }),
-    )
+    act(() => {
+      workspaceStore.getState().actions.setSelectedComponentIds([1])
+      workspaceStore.getState().actions.setSelectedFaceIds([0])
+    })
+
+    expect(screen.getByText('Face 0')).not.toBeNull()
+    expect(
+      screen.getByText('2 visible · 1 component · 1 face'),
+    ).not.toBeNull()
   })
 
   it('connects component selection, visibility, traceability, and rename to Zustand', () => {

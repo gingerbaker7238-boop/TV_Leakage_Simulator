@@ -88,7 +88,7 @@ export function SimulatorShell() {
             variant="outline"
             className="hidden border-primary/30 bg-primary/10 text-primary md:inline-flex"
           >
-            Migration · Features 07
+            Migration · Features 08
           </Badge>
         </div>
         <div className="flex items-center gap-2">
@@ -103,7 +103,7 @@ export function SimulatorShell() {
             onClick={() =>
               openFeatureNotice(
                 'Feature migration boundary',
-                'Component Tree, Material assignment와 Transform rule 상태는 React에 연결되었습니다. 실제 mesh 렌더링과 face picking은 Three.js Viewer 이전 단계에서 진행합니다.',
+                'Three.js mesh 렌더링, component·face picking, 카메라와 렌더 모드가 React 작업 상태에 연결되었습니다. 다음 단계에서는 ROI 선택과 highlight를 이전합니다.',
               )
             }
           >
@@ -134,15 +134,6 @@ export function SimulatorShell() {
           scene={scene}
           isSceneLoading={sceneQuery.isPending && activeCad !== null}
           sceneErrorMessage={sceneErrorMessage}
-          onEditMaterial={(request) =>
-            openComponentDialog('material', request)
-          }
-          onEditTransform={(request) =>
-            openComponentDialog('transform', request)
-          }
-          onDeleteComponent={(request) =>
-            openComponentDialog('delete', request)
-          }
         />
       </div>
 
