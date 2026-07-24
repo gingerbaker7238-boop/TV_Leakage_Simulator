@@ -1,0 +1,782 @@
+import {
+  BufferGeometry,
+  Float32BufferAttribute,
+  ShapeUtils,
+  Vector2,
+  Vector3,
+} from 'three'
+
+import type { ScenePayload } from '@/api'
+import type { RoiClipBox } from '@/stores'
+
+type Point3 = [number, number, number]
+type PlaneName = 'xMin' | 'xMax' | 'yMin' | 'yMax'
+
+interface TriangleRecord {
+  a: number
+  b: number
+  c: number
+  boxIndex: number
+  componentId: number
+}
+
+interface BoundaryEdge {
+  a: number
+  b: number
+  count: number
+  boxIndex: number
+  componentId: number
+}
+
+interface PlaneEdgeGroup {
+  planeName: PlaneName
+  boxIndex: number
+  edges: BoundaryEdge[]
+}
+
+export interface RoiClippedGeometryBundle {
+  surfaceGeometry: BufferGeometry
+  capGeometry: BufferGeometry | null
+  capEdgeGeometry: BufferGeometry | null
+  featureEdgeGeometry: BufferGeometry | null
+  capLoopCount: number
+  openChainCount: number
+  clippedTriangleCount: number
+  clippedVertexCount: number
+}
+
+export function normalizeRoiClipBoxes(
+  boxes: RoiClipBox[],
+): RoiClipBox[] {
+  return boxes
+    .map((box) => ({
+      xMin: Number(box.xMin),
+      xMax: Number(box.xMax),
+      yMin: Number(box.yMin),
+      yMax: Number(box.yMax),
+    }))
+    .filter(
+      (box) =>
+        Number.isFinite(box.xMin) &&
+        Number.isFinite(box.xMax) &&
+        Number.isFinite(box.yMin) &&
+        Number.isFinite(box.yMax) &&
+        box.xMax > box.xMin &&
+        box.yMax > box.yMin,
+    )
+}
+
+function clipPolygonAgainstPlane(
+  points: Point3[],
+  axisIndex: 0 | 1,
+  boundary: number,
+  keepGreater: boolean,
+): Point3[] {
+  if (points.length === 0) return []
+  const output: Point3[] = []
+  let previous = points[points.length - 1]
+  let previousInside = keepGreater
+    ? previous[axisIndex] >= boundary - 1e-9
+    : previous[axisIndex] <= boundary + 1e-9
+
+  for (const current of points) {
+    const currentInside = keepGreater
+      ? current[axisIndex] >= boundary - 1e-9
+      : current[axisIndex] <= boundary + 1e-9
+    if (currentInside !== previousInside) {
+      const denominator =
+        current[axisIndex] - previous[axisIndex]
+      if (Math.abs(denominator) > 1e-12) {
+        const t =
+          (boundary - previous[axisIndex]) / denominator
+        output.push([
+          previous[0] + (current[0] - previous[0]) * t,
+          previous[1] + (current[1] - previous[1]) * t,
+          previous[2] + (current[2] - previous[2]) * t,
+        ])
+      }
+    }
+    if (currentInside) output.push(current)
+    previous = current
+    previousInside = currentInside
+  }
+
+  const deduped: Point3[] = []
+  for (const point of output) {
+    const last = deduped[deduped.length - 1]
+    if (
+      !last ||
+      Math.hypot(
+        point[0] - last[0],
+        point[1] - last[1],
+        point[2] - last[2],
+      ) > 1e-8
+    ) {
+      deduped.push(point)
+    }
+  }
+  if (deduped.length > 2) {
+    const first = deduped[0]
+    const last = deduped[deduped.length - 1]
+    if (
+      Math.hypot(
+        first[0] - last[0],
+        first[1] - last[1],
+        first[2] - last[2],
+      ) <= 1e-8
+    ) {
+      deduped.pop()
+    }
+  }
+  return deduped
+}
+
+export function clipTriangleToRoiBox(
+  points: Point3[],
+  box: RoiClipBox,
+): Point3[] {
+  let polygon = points
+  polygon = clipPolygonAgainstPlane(
+    polygon,
+    0,
+    box.xMin,
+    true,
+  )
+  polygon = clipPolygonAgainstPlane(
+    polygon,
+    0,
+    box.xMax,
+    false,
+  )
+  polygon = clipPolygonAgainstPlane(
+    polygon,
+    1,
+    box.yMin,
+    true,
+  )
+  polygon = clipPolygonAgainstPlane(
+    polygon,
+    1,
+    box.yMax,
+    false,
+  )
+  return polygon
+}
+
+function clipVertexKey(
+  componentId: number,
+  point: Point3,
+): string {
+  const precision = 1_000_000
+  return `${componentId}:${Math.round(
+    point[0] * precision,
+  )}:${Math.round(point[1] * precision)}:${Math.round(
+    point[2] * precision,
+  )}`
+}
+
+function flatPosition(
+  positions: number[],
+  vertexIndex: number,
+): Vector3 {
+  return new Vector3(
+    positions[vertexIndex * 3],
+    positions[vertexIndex * 3 + 1],
+    positions[vertexIndex * 3 + 2],
+  )
+}
+
+function simplifyClipLoop(
+  loop: number[],
+  positions: number[],
+): number[] {
+  const simplified = [...loop]
+  let changed = true
+  while (changed && simplified.length > 3) {
+    changed = false
+    for (let index = 0; index < simplified.length; index += 1) {
+      const previous = flatPosition(
+        positions,
+        simplified[
+          (index - 1 + simplified.length) % simplified.length
+        ],
+      )
+      const current = flatPosition(positions, simplified[index])
+      const next = flatPosition(
+        positions,
+        simplified[(index + 1) % simplified.length],
+      )
+      const first = current.clone().sub(previous)
+      const second = next.clone().sub(current)
+      const scale = Math.max(
+        first.length() * second.length(),
+        1e-12,
+      )
+      if (
+        first.dot(second) >= 0 &&
+        first.clone().cross(second).length() <= scale * 1e-7
+      ) {
+        simplified.splice(index, 1)
+        changed = true
+        break
+      }
+    }
+  }
+  return simplified
+}
+
+function appendClipCap(
+  loop: number[],
+  surfacePositions: number[],
+  capPositions: number[],
+  capIndices: number[],
+  capEdgePositions: number[],
+  planeName: PlaneName,
+): boolean {
+  const cleanLoop = simplifyClipLoop(loop, surfacePositions)
+  if (cleanLoop.length < 3) return false
+  const points = cleanLoop.map((vertexIndex) =>
+    flatPosition(surfacePositions, vertexIndex),
+  )
+  const contour = points.map((point) =>
+    planeName === 'xMin' || planeName === 'xMax'
+      ? new Vector2(point.y, point.z)
+      : new Vector2(point.x, point.z),
+  )
+  const triangles = ShapeUtils.triangulateShape(contour, [])
+  if (triangles.length === 0) return false
+  const baseIndex = capPositions.length / 3
+  for (const point of points) {
+    capPositions.push(point.x, point.y, point.z)
+  }
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index]
+    const next = points[(index + 1) % points.length]
+    capEdgePositions.push(
+      current.x,
+      current.y,
+      current.z,
+      next.x,
+      next.y,
+      next.z,
+    )
+  }
+  for (const triangle of triangles) {
+    capIndices.push(
+      baseIndex + triangle[0],
+      baseIndex + triangle[1],
+      baseIndex + triangle[2],
+    )
+  }
+  return true
+}
+
+function splitCapEdgesAtTJunctions(
+  edges: BoundaryEdge[],
+  positions: number[],
+  tolerance: number,
+): BoundaryEdge[] {
+  const vertexIds = [
+    ...new Set(edges.flatMap((edge) => [edge.a, edge.b])),
+  ]
+  if (edges.length * vertexIds.length > 6_000_000) return edges
+  const segments = new Map<string, BoundaryEdge>()
+
+  for (const edge of edges) {
+    const first = flatPosition(positions, edge.a)
+    const second = flatPosition(positions, edge.b)
+    const direction = second.clone().sub(first)
+    const lengthSquared = direction.lengthSq()
+    if (lengthSquared < 1e-18) continue
+    const cuts = [
+      { t: 0, vertexId: edge.a },
+      { t: 1, vertexId: edge.b },
+    ]
+    for (const vertexId of vertexIds) {
+      if (vertexId === edge.a || vertexId === edge.b) continue
+      const point = flatPosition(positions, vertexId)
+      const t =
+        point.clone().sub(first).dot(direction) / lengthSquared
+      if (t <= 1e-8 || t >= 1 - 1e-8) continue
+      const projected = first
+        .clone()
+        .add(direction.clone().multiplyScalar(t))
+      if (projected.distanceTo(point) <= tolerance) {
+        cuts.push({ t, vertexId })
+      }
+    }
+    cuts.sort((left, right) => left.t - right.t)
+    for (let index = 0; index < cuts.length - 1; index += 1) {
+      const a = cuts[index].vertexId
+      const b = cuts[index + 1].vertexId
+      if (a === b) continue
+      const low = Math.min(a, b)
+      const high = Math.max(a, b)
+      segments.set(`${low}:${high}`, {
+        ...edge,
+        a: low,
+        b: high,
+      })
+    }
+  }
+  return [...segments.values()]
+}
+
+function closeCapEdgeChains(
+  edges: BoundaryEdge[],
+  positions: number[],
+  planeName: PlaneName,
+  box: RoiClipBox,
+  tolerance: number,
+): BoundaryEdge[] {
+  const adjacency = new Map<number, number[]>()
+  const edgeKeys = new Set<string>()
+  for (const edge of edges) {
+    const aNeighbors = adjacency.get(edge.a) ?? []
+    aNeighbors.push(edge.b)
+    adjacency.set(edge.a, aNeighbors)
+    const bNeighbors = adjacency.get(edge.b) ?? []
+    bNeighbors.push(edge.a)
+    adjacency.set(edge.b, bNeighbors)
+    edgeKeys.add(
+      `${Math.min(edge.a, edge.b)}:${Math.max(edge.a, edge.b)}`,
+    )
+  }
+  const endpoints = [...adjacency.entries()]
+    .filter(([, neighbors]) => neighbors.length === 1)
+    .map(([vertexId]) => vertexId)
+  if (endpoints.length === 0) return edges
+
+  const boundaryGroups = new Map<PlaneName, number[]>()
+  const remaining = new Set(endpoints)
+  for (const vertexId of endpoints) {
+    const point = flatPosition(positions, vertexId)
+    let boundaryName: PlaneName | null = null
+    if (planeName === 'xMin' || planeName === 'xMax') {
+      if (Math.abs(point.y - box.yMin) <= tolerance) {
+        boundaryName = 'yMin'
+      } else if (Math.abs(point.y - box.yMax) <= tolerance) {
+        boundaryName = 'yMax'
+      }
+    } else if (Math.abs(point.x - box.xMin) <= tolerance) {
+      boundaryName = 'xMin'
+    } else if (Math.abs(point.x - box.xMax) <= tolerance) {
+      boundaryName = 'xMax'
+    }
+    if (!boundaryName) continue
+    const members = boundaryGroups.get(boundaryName) ?? []
+    members.push(vertexId)
+    boundaryGroups.set(boundaryName, members)
+  }
+
+  const connectors: BoundaryEdge[] = []
+  const connectPairs = (vertexIds: number[]) => {
+    const ordered = [...vertexIds].sort(
+      (left, right) =>
+        flatPosition(positions, left).z -
+        flatPosition(positions, right).z,
+    )
+    while (ordered.length >= 2) {
+      const first = ordered.shift()
+      if (first === undefined) break
+      let bestIndex = 0
+      let bestDistance = Infinity
+      const firstPoint = flatPosition(positions, first)
+      for (let index = 0; index < ordered.length; index += 1) {
+        const distance = firstPoint.distanceTo(
+          flatPosition(positions, ordered[index]),
+        )
+        if (distance < bestDistance) {
+          bestDistance = distance
+          bestIndex = index
+        }
+      }
+      const [second] = ordered.splice(bestIndex, 1)
+      if (second === undefined) break
+      const low = Math.min(first, second)
+      const high = Math.max(first, second)
+      const key = `${low}:${high}`
+      if (!edgeKeys.has(key) && first !== second) {
+        edgeKeys.add(key)
+        connectors.push({
+          ...edges[0],
+          a: low,
+          b: high,
+          count: 1,
+        })
+      }
+      remaining.delete(first)
+      remaining.delete(second)
+    }
+  }
+
+  for (const vertexIds of boundaryGroups.values()) {
+    connectPairs(vertexIds)
+  }
+  if (remaining.size >= 2) connectPairs([...remaining])
+  return [...edges, ...connectors]
+}
+
+function clipFeatureSegment(
+  start: Point3,
+  end: Point3,
+  box: RoiClipBox,
+): [Point3, Point3] | null {
+  const delta: Point3 = [
+    end[0] - start[0],
+    end[1] - start[1],
+    end[2] - start[2],
+  ]
+  let enter = 0
+  let leave = 1
+  const constraints = [
+    [-delta[0], start[0] - box.xMin],
+    [delta[0], box.xMax - start[0]],
+    [-delta[1], start[1] - box.yMin],
+    [delta[1], box.yMax - start[1]],
+  ]
+  for (const [direction, distance] of constraints) {
+    if (Math.abs(direction) < 1e-12) {
+      if (distance < 0) return null
+      continue
+    }
+    const ratio = distance / direction
+    if (direction < 0) enter = Math.max(enter, ratio)
+    else leave = Math.min(leave, ratio)
+    if (enter > leave) return null
+  }
+  return [
+    [
+      start[0] + delta[0] * enter,
+      start[1] + delta[1] * enter,
+      start[2] + delta[2] * enter,
+    ],
+    [
+      start[0] + delta[0] * leave,
+      start[1] + delta[1] * leave,
+      start[2] + delta[2] * leave,
+    ],
+  ]
+}
+
+function buildFeatureEdgeGeometry(
+  scene: ScenePayload,
+  boxes: RoiClipBox[],
+  unavailableComponentIds: Set<number>,
+): BufferGeometry | null {
+  const positions: number[] = []
+  for (const segment of scene.mesh.feature_edge_segments) {
+    if (
+      segment.component_id === null ||
+      unavailableComponentIds.has(segment.component_id)
+    ) {
+      continue
+    }
+    for (const box of boxes) {
+      const clipped = clipFeatureSegment(
+        [...segment.start] as Point3,
+        [...segment.end] as Point3,
+        box,
+      )
+      if (!clipped) continue
+      positions.push(...clipped[0], ...clipped[1])
+    }
+  }
+  if (positions.length === 0) return null
+  const geometry = new BufferGeometry()
+  geometry.setAttribute(
+    'position',
+    new Float32BufferAttribute(positions, 3),
+  )
+  return geometry
+}
+
+export function buildRoiClippedGeometries(
+  scene: ScenePayload,
+  faceFilter: number[],
+  boxes: RoiClipBox[],
+  unavailableComponentIds: Iterable<number> = [],
+): RoiClippedGeometryBundle | null {
+  const clipBoxes = normalizeRoiClipBoxes(boxes)
+  if (clipBoxes.length === 0 || faceFilter.length === 0) return null
+  const unavailable = new Set(unavailableComponentIds)
+  const positions: number[] = []
+  const indices: number[] = []
+  const sourceFaceIds: number[] = []
+  const triangleRecords: TriangleRecord[] = []
+  const vertexMaps = clipBoxes.map(() => new Map<string, number>())
+
+  const addVertex = (
+    boxIndex: number,
+    componentId: number,
+    point: Point3,
+  ) => {
+    const key = clipVertexKey(componentId, point)
+    const vertexMap = vertexMaps[boxIndex]
+    const existing = vertexMap.get(key)
+    if (existing !== undefined) return existing
+    const vertexIndex = positions.length / 3
+    positions.push(...point)
+    vertexMap.set(key, vertexIndex)
+    return vertexIndex
+  }
+
+  for (const faceId of faceFilter) {
+    const triangle = scene.mesh.faces[faceId]
+    const componentId =
+      scene.mesh.face_component_ids[faceId] ?? -1
+    if (
+      !triangle ||
+      componentId < 0 ||
+      unavailable.has(componentId)
+    ) {
+      continue
+    }
+    const trianglePoints = triangle.map(
+      (vertexIndex) =>
+        [...scene.mesh.vertices[vertexIndex]] as Point3,
+    )
+    for (
+      let boxIndex = 0;
+      boxIndex < clipBoxes.length;
+      boxIndex += 1
+    ) {
+      const polygon = clipTriangleToRoiBox(
+        trianglePoints,
+        clipBoxes[boxIndex],
+      )
+      if (polygon.length < 3) continue
+      const polygonIndices = polygon.map((point) =>
+        addVertex(boxIndex, componentId, point),
+      )
+      for (
+        let index = 1;
+        index < polygonIndices.length - 1;
+        index += 1
+      ) {
+        const a = polygonIndices[0]
+        const b = polygonIndices[index]
+        const c = polygonIndices[index + 1]
+        const pa = flatPosition(positions, a)
+        const pb = flatPosition(positions, b)
+        const pc = flatPosition(positions, c)
+        if (
+          pb
+            .clone()
+            .sub(pa)
+            .cross(pc.clone().sub(pa))
+            .lengthSq() < 1e-16
+        ) {
+          continue
+        }
+        indices.push(a, b, c)
+        sourceFaceIds.push(faceId)
+        triangleRecords.push({
+          a,
+          b,
+          c,
+          boxIndex,
+          componentId,
+        })
+      }
+    }
+  }
+  if (indices.length === 0) return null
+
+  const surfaceGeometry = new BufferGeometry()
+  surfaceGeometry.setAttribute(
+    'position',
+    new Float32BufferAttribute(positions, 3),
+  )
+  surfaceGeometry.setIndex(indices)
+  surfaceGeometry.computeVertexNormals()
+  surfaceGeometry.computeBoundingBox()
+  surfaceGeometry.computeBoundingSphere()
+  surfaceGeometry.userData.sourceFaceIds = sourceFaceIds
+
+  const edgeRecords = new Map<string, BoundaryEdge>()
+  for (const triangle of triangleRecords) {
+    for (const [a, b] of [
+      [triangle.a, triangle.b],
+      [triangle.b, triangle.c],
+      [triangle.c, triangle.a],
+    ]) {
+      const low = Math.min(a, b)
+      const high = Math.max(a, b)
+      const key = `${triangle.boxIndex}:${triangle.componentId}:${low}:${high}`
+      const record = edgeRecords.get(key) ?? {
+        a: low,
+        b: high,
+        count: 0,
+        boxIndex: triangle.boxIndex,
+        componentId: triangle.componentId,
+      }
+      record.count += 1
+      edgeRecords.set(key, record)
+    }
+  }
+
+  const planeGroups = new Map<string, PlaneEdgeGroup>()
+  for (const edge of edgeRecords.values()) {
+    if (edge.count !== 1) continue
+    const box = clipBoxes[edge.boxIndex]
+    const first = flatPosition(positions, edge.a)
+    const second = flatPosition(positions, edge.b)
+    const tolerance =
+      Math.max(
+        box.xMax - box.xMin,
+        box.yMax - box.yMin,
+        1,
+      ) * 1e-6
+    let planeName: PlaneName | null = null
+    if (
+      Math.abs(first.x - box.xMin) <= tolerance &&
+      Math.abs(second.x - box.xMin) <= tolerance
+    ) {
+      planeName = 'xMin'
+    } else if (
+      Math.abs(first.x - box.xMax) <= tolerance &&
+      Math.abs(second.x - box.xMax) <= tolerance
+    ) {
+      planeName = 'xMax'
+    } else if (
+      Math.abs(first.y - box.yMin) <= tolerance &&
+      Math.abs(second.y - box.yMin) <= tolerance
+    ) {
+      planeName = 'yMin'
+    } else if (
+      Math.abs(first.y - box.yMax) <= tolerance &&
+      Math.abs(second.y - box.yMax) <= tolerance
+    ) {
+      planeName = 'yMax'
+    }
+    if (!planeName) continue
+    const key = `${edge.boxIndex}:${edge.componentId}:${planeName}`
+    const group = planeGroups.get(key) ?? {
+      planeName,
+      boxIndex: edge.boxIndex,
+      edges: [],
+    }
+    group.edges.push(edge)
+    planeGroups.set(key, group)
+  }
+
+  const capPositions: number[] = []
+  const capIndices: number[] = []
+  const capEdgePositions: number[] = []
+  let capLoopCount = 0
+  let openChainCount = 0
+  for (const group of planeGroups.values()) {
+    const groupSpan = group.edges.reduce((maxLength, edge) => {
+      const first = flatPosition(positions, edge.a)
+      const second = flatPosition(positions, edge.b)
+      return Math.max(maxLength, first.distanceTo(second))
+    }, 1)
+    const tolerance = Math.max(groupSpan * 1e-7, 1e-6)
+    const splitEdges = splitCapEdgesAtTJunctions(
+      group.edges,
+      positions,
+      tolerance,
+    )
+    const edges = closeCapEdgeChains(
+      splitEdges,
+      positions,
+      group.planeName,
+      clipBoxes[group.boxIndex],
+      tolerance,
+    )
+    const adjacency = new Map<number, number[]>()
+    edges.forEach((edge, edgeIndex) => {
+      const aEdges = adjacency.get(edge.a) ?? []
+      aEdges.push(edgeIndex)
+      adjacency.set(edge.a, aEdges)
+      const bEdges = adjacency.get(edge.b) ?? []
+      bEdges.push(edgeIndex)
+      adjacency.set(edge.b, bEdges)
+    })
+
+    const unused = new Set(edges.map((_, index) => index))
+    while (unused.size > 0) {
+      const firstEdgeIndex = unused.values().next().value
+      if (firstEdgeIndex === undefined) break
+      const firstEdge = edges[firstEdgeIndex]
+      unused.delete(firstEdgeIndex)
+      const loop = [firstEdge.a, firstEdge.b]
+      let currentVertex = firstEdge.b
+      let closed = false
+      let guard = 0
+      while (guard < edges.length + 2) {
+        guard += 1
+        if (currentVertex === loop[0]) {
+          closed = true
+          break
+        }
+        const nextEdgeIndex = (
+          adjacency.get(currentVertex) ?? []
+        ).find((edgeIndex) => unused.has(edgeIndex))
+        if (nextEdgeIndex === undefined) break
+        unused.delete(nextEdgeIndex)
+        const nextEdge = edges[nextEdgeIndex]
+        currentVertex =
+          nextEdge.a === currentVertex ? nextEdge.b : nextEdge.a
+        loop.push(currentVertex)
+      }
+      if (!closed || loop.length < 4) {
+        openChainCount += 1
+        continue
+      }
+      loop.pop()
+      if (
+        appendClipCap(
+          loop,
+          positions,
+          capPositions,
+          capIndices,
+          capEdgePositions,
+          group.planeName,
+        )
+      ) {
+        capLoopCount += 1
+      }
+    }
+  }
+
+  let capGeometry: BufferGeometry | null = null
+  if (capIndices.length > 0) {
+    capGeometry = new BufferGeometry()
+    capGeometry.setAttribute(
+      'position',
+      new Float32BufferAttribute(capPositions, 3),
+    )
+    capGeometry.setIndex(capIndices)
+    capGeometry.computeVertexNormals()
+    capGeometry.computeBoundingBox()
+    capGeometry.computeBoundingSphere()
+    capGeometry.userData.roiCapLoopCount = capLoopCount
+    capGeometry.userData.roiCapOpenChainCount = openChainCount
+  }
+
+  let capEdgeGeometry: BufferGeometry | null = null
+  if (capEdgePositions.length > 0) {
+    capEdgeGeometry = new BufferGeometry()
+    capEdgeGeometry.setAttribute(
+      'position',
+      new Float32BufferAttribute(capEdgePositions, 3),
+    )
+  }
+
+  return {
+    surfaceGeometry,
+    capGeometry,
+    capEdgeGeometry,
+    featureEdgeGeometry: buildFeatureEdgeGeometry(
+      scene,
+      clipBoxes,
+      unavailable,
+    ),
+    capLoopCount,
+    openChainCount,
+    clippedTriangleCount: indices.length / 3,
+    clippedVertexCount: positions.length / 3,
+  }
+}

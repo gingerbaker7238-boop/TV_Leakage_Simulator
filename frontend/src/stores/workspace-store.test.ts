@@ -122,4 +122,49 @@ describe('workspace store', () => {
       transformRules: [],
     })
   })
+
+  it('owns multi-scope ROI activation and clears it with scene state', () => {
+    const store = createWorkspaceStore()
+    const { actions } = store.getState()
+
+    actions.setRoiDraftLabel('bottom-corner')
+    actions.setRoiBoxSelectionArmed(true)
+    actions.addRoiScope({
+      label: store.getState().roiDraftLabel,
+      source: 'box',
+      view: 'front_xy',
+      clipBox: { xMin: 10, xMax: 20, yMin: 30, yMax: 40 },
+      components: [
+        {
+          componentId: 2,
+          componentName: 'Rear cover',
+          faceIds: [4, 3, 4],
+          areaMm2: 24.5,
+          bboxMin: { x: 10, y: 30, z: 0 },
+          bboxMax: { x: 20, y: 40, z: 5 },
+        },
+      ],
+    })
+
+    expect(store.getState()).toMatchObject({
+      roiScopeSequence: 1,
+      roiDraftLabel: '',
+      roiBoxSelectionArmed: false,
+      roiScopes: [
+        {
+          id: 'roi-1',
+          scopeId: 'bottom-corner',
+          active: true,
+          components: [{ faceIds: [3, 4] }],
+        },
+      ],
+    })
+
+    actions.setRoiScopeActive('roi-1', false)
+    expect(store.getState().roiScopes[0].active).toBe(false)
+
+    actions.clearSceneState()
+    expect(store.getState().roiScopes).toEqual([])
+    expect(store.getState().roiScopeSequence).toBe(0)
+  })
 })

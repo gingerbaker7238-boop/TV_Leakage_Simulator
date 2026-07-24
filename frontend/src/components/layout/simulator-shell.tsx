@@ -88,7 +88,7 @@ export function SimulatorShell() {
             variant="outline"
             className="hidden border-primary/30 bg-primary/10 text-primary md:inline-flex"
           >
-            Migration · Features 08
+            Migration · Features 09
           </Badge>
         </div>
         <div className="flex items-center gap-2">
@@ -103,7 +103,7 @@ export function SimulatorShell() {
             onClick={() =>
               openFeatureNotice(
                 'Feature migration boundary',
-                'Three.js mesh 렌더링, component·face picking, 카메라와 렌더 모드가 React 작업 상태에 연결되었습니다. 다음 단계에서는 ROI 선택과 highlight를 이전합니다.',
+                'ROI 박스 드래그와 좌표 입력, 다중 scope 활성화, 정밀 mesh clipping과 폐곡선 section cap이 React Viewer에 연결되었습니다.',
               )
             }
           >

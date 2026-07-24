@@ -17,6 +17,7 @@ import {
   type ComponentEditorRequest,
 } from '@/features/components'
 import { MaterialAssignmentPanel } from '@/features/materials'
+import { RoiSelectionPanel } from '@/features/roi'
 import { TransformRulePanel } from '@/features/transforms'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -123,6 +124,10 @@ export function WorkflowSidebar({
         : undefined
 
   const activePanel = (() => {
+    if (activeSection === 'roi') {
+      return <RoiSelectionPanel scene={scene} />
+    }
+
     if (activeSection === 'components') {
       return (
         <ComponentTreePanel
@@ -169,7 +174,8 @@ export function WorkflowSidebar({
     )
   })()
 
-  const isStepSevenSection =
+  const isMigratedSection =
+    activeSection === 'roi' ||
     activeSection === 'components' ||
     activeSection === 'material' ||
     activeSection === 'transform'
@@ -180,7 +186,7 @@ export function WorkflowSidebar({
         <div className="space-y-4 p-3">
           <ModelImportCard
             sceneStatus={sceneStatus}
-            onImported={() => onActiveSectionChange('components')}
+            onImported={() => onActiveSectionChange('roi')}
           />
 
           <section aria-labelledby="workflow-navigation-title">
@@ -259,12 +265,16 @@ export function WorkflowSidebar({
                 <Badge
                   variant="outline"
                   className={cn(
-                    isStepSevenSection
+                    isMigratedSection
                       ? 'border-primary/25 bg-primary/8 text-primary'
                       : 'border-border text-muted-foreground',
                   )}
                 >
-                  {isStepSevenSection ? 'Migrated · 07' : 'Queued'}
+                  {activeSection === 'roi'
+                    ? 'Migrated · 09'
+                    : isMigratedSection
+                      ? 'Migrated · 07'
+                      : 'Queued'}
                 </Badge>
               </div>
             </CardHeader>

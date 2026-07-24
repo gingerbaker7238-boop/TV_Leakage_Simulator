@@ -40,6 +40,45 @@ export interface ComponentTransformRule {
   enabled: boolean
 }
 
+export type RoiSelectionSource = 'box' | 'point'
+export type RoiView = 'front_xy' | 'back_neg_xy' | 'coordinate'
+
+export interface RoiClipBox {
+  xMin: number
+  xMax: number
+  yMin: number
+  yMax: number
+}
+
+export interface RoiComponentClip {
+  componentId: number
+  componentName: string
+  faceIds: number[]
+  areaMm2: number
+  bboxMin: Vector3Value
+  bboxMax: Vector3Value
+}
+
+export interface RoiScope {
+  id: string
+  scopeId: string
+  source: RoiSelectionSource
+  view: RoiView
+  components: RoiComponentClip[]
+  active: boolean
+  clipBox?: RoiClipBox
+  point?: Vector3Value
+}
+
+export interface RoiScopeInput {
+  label?: string
+  source: RoiSelectionSource
+  view: RoiView
+  components: RoiComponentClip[]
+  clipBox?: RoiClipBox
+  point?: Vector3Value
+}
+
 export interface WorkspaceSnapshot {
   activeCad: ActiveCad | null
   selectedFaceIds: number[]
@@ -50,6 +89,10 @@ export interface WorkspaceSnapshot {
   componentNameOverrides: Record<number, string>
   materialAssignments: MaterialAssignment[]
   transformRules: ComponentTransformRule[]
+  roiScopes: RoiScope[]
+  roiScopeSequence: number
+  roiBoxSelectionArmed: boolean
+  roiDraftLabel: string
   activeRayTraceJobId: string | null
 }
 
@@ -71,6 +114,12 @@ export interface WorkspaceActions {
   upsertTransformRule(rule: ComponentTransformRule): void
   setTransformRuleEnabled(ruleId: string, enabled: boolean): void
   removeTransformRule(ruleId: string): void
+  addRoiScope(scope: RoiScopeInput): void
+  setRoiScopeActive(scopeId: string, active: boolean): void
+  removeRoiScope(scopeId: string): void
+  clearRoiScopes(): void
+  setRoiBoxSelectionArmed(armed: boolean): void
+  setRoiDraftLabel(label: string): void
   setActiveRayTraceJobId(jobId: string | null): void
   clearSceneState(): void
   resetWorkspace(): void
@@ -131,6 +180,43 @@ function normalizeTransformRule(
   }
 }
 
+function normalizeRoiComponentClip(
+  component: RoiComponentClip,
+): RoiComponentClip {
+  return {
+    ...component,
+    faceIds: normalizeIds(component.faceIds),
+    areaMm2: Number.isFinite(component.areaMm2)
+      ? Math.max(component.areaMm2, 0)
+      : 0,
+    bboxMin: normalizeVector(component.bboxMin),
+    bboxMax: normalizeVector(component.bboxMax),
+  }
+}
+
+function normalizeRoiClipBox(
+  clipBox: RoiClipBox | undefined,
+): RoiClipBox | undefined {
+  if (!clipBox) return undefined
+
+  const values = [
+    clipBox.xMin,
+    clipBox.xMax,
+    clipBox.yMin,
+    clipBox.yMax,
+  ]
+  if (values.some((value) => !Number.isFinite(value))) {
+    return undefined
+  }
+
+  return {
+    xMin: Math.min(clipBox.xMin, clipBox.xMax),
+    xMax: Math.max(clipBox.xMin, clipBox.xMax),
+    yMin: Math.min(clipBox.yMin, clipBox.yMax),
+    yMax: Math.max(clipBox.yMin, clipBox.yMax),
+  }
+}
+
 function createSceneSnapshot(): Omit<WorkspaceSnapshot, 'activeCad'> {
   return {
     selectedFaceIds: [],
@@ -141,6 +227,10 @@ function createSceneSnapshot(): Omit<WorkspaceSnapshot, 'activeCad'> {
     componentNameOverrides: {},
     materialAssignments: [],
     transformRules: [],
+    roiScopes: [],
+    roiScopeSequence: 0,
+    roiBoxSelectionArmed: false,
+    roiDraftLabel: '',
     activeRayTraceJobId: null,
   }
 }
@@ -228,30 +318,42 @@ export function createWorkspaceStore(): WorkspaceStoreApi {
         if (!Number.isSafeInteger(componentId) || componentId < 0) return
         const deletedFaceIds = new Set(normalizeIds(faceIds))
 
-        set((state) => ({
-          selectedFaceIds: state.selectedFaceIds.filter(
-            (faceId) => !deletedFaceIds.has(faceId),
-          ),
-          selectedComponentIds: state.selectedComponentIds.filter(
-            (id) => id !== componentId,
-          ),
-          hiddenComponentIds: state.hiddenComponentIds.filter(
-            (id) => id !== componentId,
-          ),
-          excludedComponentIds: state.excludedComponentIds.filter(
-            (id) => id !== componentId,
-          ),
-          deletedComponentIds: normalizeIds([
-            ...state.deletedComponentIds,
-            componentId,
-          ]),
-          materialAssignments: state.materialAssignments.filter(
-            (assignment) => assignment.componentId !== componentId,
-          ),
-          transformRules: state.transformRules.filter(
-            (rule) => rule.componentId !== componentId,
-          ),
-        }))
+        set((state) => {
+          const roiScopes = state.roiScopes
+            .map((scope) => ({
+              ...scope,
+              components: scope.components.filter(
+                (component) => component.componentId !== componentId,
+              ),
+            }))
+            .filter((scope) => scope.components.length > 0)
+
+          return {
+            selectedFaceIds: state.selectedFaceIds.filter(
+              (faceId) => !deletedFaceIds.has(faceId),
+            ),
+            selectedComponentIds: state.selectedComponentIds.filter(
+              (id) => id !== componentId,
+            ),
+            hiddenComponentIds: state.hiddenComponentIds.filter(
+              (id) => id !== componentId,
+            ),
+            excludedComponentIds: state.excludedComponentIds.filter(
+              (id) => id !== componentId,
+            ),
+            deletedComponentIds: normalizeIds([
+              ...state.deletedComponentIds,
+              componentId,
+            ]),
+            materialAssignments: state.materialAssignments.filter(
+              (assignment) => assignment.componentId !== componentId,
+            ),
+            transformRules: state.transformRules.filter(
+              (rule) => rule.componentId !== componentId,
+            ),
+            roiScopes,
+          }
+        })
       },
       upsertMaterialAssignment: (assignment) => {
         const normalized = normalizeMaterialAssignment(assignment)
@@ -296,6 +398,64 @@ export function createWorkspaceStore(): WorkspaceStoreApi {
           ),
         }))
       },
+      addRoiScope: (scope) => {
+        const components = scope.components
+          .map(normalizeRoiComponentClip)
+          .filter((component) => component.faceIds.length > 0)
+        if (components.length === 0) return
+
+        set((state) => {
+          const sequence = state.roiScopeSequence + 1
+          const label = scope.label?.trim()
+          return {
+            roiScopeSequence: sequence,
+            roiDraftLabel: '',
+            roiBoxSelectionArmed: false,
+            roiScopes: [
+              ...state.roiScopes,
+              {
+                id: `roi-${sequence}`,
+                scopeId: label || `ROI-${sequence}`,
+                source: scope.source,
+                view: scope.view,
+                components,
+                active: true,
+                clipBox: normalizeRoiClipBox(scope.clipBox),
+                point: scope.point
+                  ? normalizeVector(scope.point)
+                  : undefined,
+              },
+            ],
+          }
+        })
+      },
+      setRoiScopeActive: (scopeId, active) => {
+        set((state) => ({
+          roiScopes: state.roiScopes.map((scope) =>
+            scope.id === scopeId ? { ...scope, active } : scope,
+          ),
+        }))
+      },
+      removeRoiScope: (scopeId) => {
+        set((state) => ({
+          roiScopes: state.roiScopes.filter(
+            (scope) => scope.id !== scopeId,
+          ),
+        }))
+      },
+      clearRoiScopes: () => {
+        set({
+          roiScopes: [],
+          roiBoxSelectionArmed: false,
+          roiDraftLabel: '',
+        })
+      },
+      setRoiBoxSelectionArmed: (roiBoxSelectionArmed) => {
+        set({ roiBoxSelectionArmed })
+      },
+      setRoiDraftLabel: (roiDraftLabel) => {
+        set({ roiDraftLabel })
+      },
       setActiveRayTraceJobId: (activeRayTraceJobId) => {
         set({ activeRayTraceJobId })
       },
@@ -332,6 +492,10 @@ export const workspaceSelectors = {
   materialAssignments: (state: WorkspaceStore) =>
     state.materialAssignments,
   transformRules: (state: WorkspaceStore) => state.transformRules,
+  roiScopes: (state: WorkspaceStore) => state.roiScopes,
+  roiBoxSelectionArmed: (state: WorkspaceStore) =>
+    state.roiBoxSelectionArmed,
+  roiDraftLabel: (state: WorkspaceStore) => state.roiDraftLabel,
   activeRayTraceJobId: (state: WorkspaceStore) =>
     state.activeRayTraceJobId,
   actions: (state: WorkspaceStore) => state.actions,

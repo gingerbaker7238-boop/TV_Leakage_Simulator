@@ -1,0 +1,381 @@
+import { useMemo, useState } from 'react'
+import {
+  BoxSelect,
+  Crosshair,
+  MapPin,
+  Power,
+  Trash2,
+} from 'lucide-react'
+
+import type { ScenePayload } from '@/api'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
+import {
+  useWorkspaceStore,
+  workspaceSelectors,
+  type Vector3Value,
+} from '@/stores'
+
+import {
+  groupRoiFacesByComponent,
+  resolveNearestVisibleFace,
+  summarizeActiveRoiScopes,
+} from './roi-selection'
+
+interface RoiSelectionPanelProps {
+  scene?: ScenePayload
+}
+
+function formatArea(value: number): string {
+  return new Intl.NumberFormat('ko-KR', {
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
+function parseCoordinate(
+  coordinate: Record<'x' | 'y' | 'z', string>,
+): Vector3Value | null {
+  if (Object.values(coordinate).some((value) => !value.trim())) {
+    return null
+  }
+  const point = {
+    x: Number(coordinate.x),
+    y: Number(coordinate.y),
+    z: Number(coordinate.z),
+  }
+  return Object.values(point).every(Number.isFinite) ? point : null
+}
+
+export function RoiSelectionPanel({
+  scene,
+}: RoiSelectionPanelProps) {
+  const [coordinate, setCoordinate] = useState({
+    x: '',
+    y: '',
+    z: '',
+  })
+  const [coordinateResult, setCoordinateResult] = useState('')
+  const roiScopes = useWorkspaceStore(workspaceSelectors.roiScopes)
+  const roiBoxSelectionArmed = useWorkspaceStore(
+    workspaceSelectors.roiBoxSelectionArmed,
+  )
+  const roiDraftLabel = useWorkspaceStore(
+    workspaceSelectors.roiDraftLabel,
+  )
+  const hiddenComponentIds = useWorkspaceStore(
+    workspaceSelectors.hiddenComponentIds,
+  )
+  const deletedComponentIds = useWorkspaceStore(
+    workspaceSelectors.deletedComponentIds,
+  )
+  const componentNameOverrides = useWorkspaceStore(
+    workspaceSelectors.componentNameOverrides,
+  )
+  const actions = useWorkspaceStore(workspaceSelectors.actions)
+  const summary = useMemo(
+    () => summarizeActiveRoiScopes(roiScopes),
+    [roiScopes],
+  )
+
+  const resolveCoordinate = () => {
+    if (!scene) {
+      setCoordinateResult('먼저 CAD를 Import하세요.')
+      return
+    }
+    const point = parseCoordinate(coordinate)
+    if (!point) {
+      setCoordinateResult('X, Y, Z 좌표를 모두 숫자로 입력하세요.')
+      return
+    }
+
+    const faceId = resolveNearestVisibleFace(
+      scene,
+      point,
+      hiddenComponentIds,
+      deletedComponentIds,
+    )
+    if (faceId === null) {
+      setCoordinateResult(
+        '보이는 컴포넌트에서 선택 가능한 face를 찾지 못했습니다.',
+      )
+      return
+    }
+
+    actions.addRoiScope({
+      label: roiDraftLabel,
+      source: 'point',
+      view: 'coordinate',
+      point,
+      components: groupRoiFacesByComponent(
+        scene,
+        [faceId],
+        componentNameOverrides,
+      ),
+    })
+    setCoordinateResult(`Face ${faceId}를 ROI List에 추가했습니다.`)
+    setCoordinate({ x: '', y: '', z: '' })
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <label
+          htmlFor="roi-scope-label"
+          className="text-[0.68rem] font-medium text-muted-foreground"
+        >
+          ROI 이름
+        </label>
+        <input
+          id="roi-scope-label"
+          value={roiDraftLabel}
+          placeholder="예: bottom-corner"
+          className="h-9 w-full rounded-lg border border-border bg-background/60 px-3 text-xs outline-none transition focus:border-primary/60 focus:ring-2 focus:ring-primary/15"
+          onChange={(event) =>
+            actions.setRoiDraftLabel(event.currentTarget.value)
+          }
+        />
+      </div>
+
+      <div className="rounded-xl border border-border bg-background/35 p-3">
+        <div className="flex items-start gap-2">
+          <BoxSelect className="mt-0.5 size-4 shrink-0 text-primary" />
+          <div className="min-w-0">
+            <div className="text-xs font-semibold">박스 드래그</div>
+            <p className="mt-1 text-[0.68rem] leading-5 text-muted-foreground">
+              보이는 컴포넌트만 대상으로 정면 XY 범위를 선택합니다. Z
+              방향은 제한하지 않습니다.
+            </p>
+          </div>
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant={roiBoxSelectionArmed ? 'default' : 'outline'}
+          disabled={!scene}
+          className="mt-3 w-full"
+          onClick={() =>
+            actions.setRoiBoxSelectionArmed(!roiBoxSelectionArmed)
+          }
+        >
+          <Crosshair className="size-3.5" />
+          {roiBoxSelectionArmed
+            ? 'ROI 드래그 취소'
+            : '+ ROI 추가 후 드래그'}
+        </Button>
+        {roiBoxSelectionArmed ? (
+          <p className="mt-2 text-[0.66rem] leading-5 text-primary">
+            Viewer가 가까운 XY/-XY 방향으로 정렬되었습니다. 왼쪽
+            버튼을 누른 채 영역을 그리세요.
+          </p>
+        ) : null}
+      </div>
+
+      <div className="rounded-xl border border-border bg-background/35 p-3">
+        <div className="flex items-center gap-2">
+          <MapPin className="size-4 text-primary" />
+          <div className="text-xs font-semibold">좌표로 Face 찾기</div>
+        </div>
+        <div className="mt-3 grid grid-cols-3 gap-1.5">
+          {(['x', 'y', 'z'] as const).map((axis) => (
+            <label
+              key={axis}
+              className="text-[0.62rem] font-medium text-muted-foreground uppercase"
+            >
+              {axis} (mm)
+              <input
+                aria-label={`ROI ${axis.toUpperCase()} coordinate`}
+                inputMode="decimal"
+                value={coordinate[axis]}
+                className="mt-1 h-8 w-full rounded-md border border-border bg-background/60 px-2 text-xs text-foreground outline-none focus:border-primary/60"
+                onChange={(event) => {
+                  const value = event.currentTarget.value
+                  setCoordinate((current) => ({
+                    ...current,
+                    [axis]: value,
+                  }))
+                }}
+              />
+            </label>
+          ))}
+        </div>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={!scene}
+          className="mt-2.5 w-full"
+          onClick={resolveCoordinate}
+        >
+          좌표로 ROI 추가
+        </Button>
+        {coordinateResult ? (
+          <p
+            role="status"
+            className="mt-2 text-[0.66rem] leading-5 text-muted-foreground"
+          >
+            {coordinateResult}
+          </p>
+        ) : null}
+      </div>
+
+      <section aria-labelledby="roi-list-title">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div
+              id="roi-list-title"
+              className="text-xs font-semibold"
+            >
+              ROI List
+            </div>
+            <p className="mt-0.5 text-[0.64rem] text-muted-foreground">
+              활성화한 scope만 분석과 Viewer 격리 표시에 반영됩니다.
+            </p>
+          </div>
+          {roiScopes.length > 0 ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-[0.66rem]"
+              onClick={() => actions.clearRoiScopes()}
+            >
+              전체 삭제
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="mt-2 space-y-2">
+          {roiScopes.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-[0.68rem] text-muted-foreground">
+              아직 만든 ROI가 없습니다.
+            </div>
+          ) : (
+            roiScopes.map((scope) => {
+              const faceCount = scope.components.reduce(
+                (sum, component) => sum + component.faceIds.length,
+                0,
+              )
+              const areaMm2 = scope.components.reduce(
+                (sum, component) => sum + component.areaMm2,
+                0,
+              )
+
+              return (
+                <article
+                  key={scope.id}
+                  className={cn(
+                    'rounded-lg border p-2.5 transition-colors',
+                    scope.active
+                      ? 'border-primary/35 bg-primary/8'
+                      : 'border-border bg-background/30 opacity-70',
+                  )}
+                >
+                  <div className="flex items-start gap-2">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
+                      <input
+                        type="checkbox"
+                        aria-label={`${scope.scopeId} 활성화`}
+                        checked={scope.active}
+                        className="mt-0.5 size-3.5 accent-primary"
+                        onChange={(event) =>
+                          actions.setRoiScopeActive(
+                            scope.id,
+                            event.currentTarget.checked,
+                          )
+                        }
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate text-[0.7rem] font-semibold">
+                          {scope.scopeId}
+                        </span>
+                        <span className="mt-0.5 block text-[0.62rem] text-muted-foreground">
+                          {scope.source === 'box' ? scope.view : 'coordinate'}
+                          {' · '}
+                          {faceCount.toLocaleString()} faces
+                          {' · '}
+                          {formatArea(areaMm2)} mm²
+                        </span>
+                      </span>
+                    </label>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      aria-label={`${scope.scopeId} 삭제`}
+                      onClick={() => actions.removeRoiScope(scope.id)}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  </div>
+                  <div className="mt-2 space-y-1 border-t border-border/60 pt-2">
+                    {scope.components.map((component) => (
+                      <div
+                        key={component.componentId}
+                        className="flex items-center justify-between gap-2 text-[0.61rem] text-muted-foreground"
+                      >
+                        <span className="truncate">
+                          {component.componentName}
+                        </span>
+                        <span className="shrink-0">
+                          {component.faceIds.length} ·{' '}
+                          {formatArea(component.areaMm2)} mm²
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              )
+            })
+          )}
+        </div>
+      </section>
+
+      <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-semibold">
+            <Power className="size-3.5 text-primary" />
+            활성 ROI
+          </div>
+          <Badge variant="outline" className="border-primary/25 text-primary">
+            {summary.scopeCount} scopes
+          </Badge>
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+          {[
+            ['Face', summary.faceCount.toLocaleString()],
+            ['Component', summary.componentCount.toLocaleString()],
+            ['Area', `${formatArea(summary.areaMm2)} mm²`],
+          ].map(([label, value]) => (
+            <div
+              key={label}
+              className="rounded-md bg-background/45 px-1 py-2"
+            >
+              <div className="text-[0.58rem] text-muted-foreground">
+                {label}
+              </div>
+              <div className="mt-0.5 truncate text-[0.66rem] font-semibold">
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+        {summary.bboxMin && summary.bboxMax ? (
+          <p className="mt-2 text-[0.61rem] leading-5 text-muted-foreground">
+            Bounds · X {summary.bboxMin.x.toFixed(1)}~
+            {summary.bboxMax.x.toFixed(1)} · Y{' '}
+            {summary.bboxMin.y.toFixed(1)}~
+            {summary.bboxMax.y.toFixed(1)} · Z{' '}
+            {summary.bboxMin.z.toFixed(1)}~
+            {summary.bboxMax.z.toFixed(1)} mm
+          </p>
+        ) : null}
+        <p className="mt-2 text-[0.61rem] leading-5 text-muted-foreground">
+          박스 ROI는 경계에서 triangle을 실제 절단하고 새 vertex와
+          폐곡선 section cap을 만든 뒤 ROI solid만 표시합니다. 좌표
+          선택은 단일 face 보완 경로라 절단 cap을 만들지 않습니다.
+        </p>
+      </div>
+    </div>
+  )
+}

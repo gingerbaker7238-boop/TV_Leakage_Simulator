@@ -20,6 +20,7 @@ import {
   MeshStandardMaterial,
   MOUSE,
   OrthographicCamera,
+  Plane,
   PerspectiveCamera,
   Raycaster,
   Scene,
@@ -40,11 +41,13 @@ import {
   findBaseMaterial,
   findSurfaceProperty,
 } from '@/features/materials'
+import { buildRoiClippedGeometries } from '@/features/roi/roi-clipped-geometry'
 import {
   useWorkspaceStore,
   workspaceSelectors,
   type ComponentTransformRule,
   type MaterialAssignment,
+  type RoiScope,
 } from '@/stores'
 
 import {
@@ -60,12 +63,26 @@ export type ViewerRenderMode =
   | 'Surface'
   | 'Surface + Edge'
 
+export interface RoiBoxSelectionResult {
+  clipBox: {
+    xMin: number
+    xMax: number
+    yMin: number
+    yMax: number
+  }
+  view: 'front_xy' | 'back_neg_xy'
+}
+
 interface ThreeViewerCanvasProps {
   scene: ScenePayload
   axisScalePercent: number
   cameraPreset: ViewerCameraPreset
   cameraRequestId: number
   renderMode: ViewerRenderMode
+  roiBoxSelectionArmed: boolean
+  roiFaceIds: number[]
+  roiScopes: RoiScope[]
+  onRoiBoxSelection(result: RoiBoxSelectionResult): void
   onStatusMessage(message: string): void
 }
 
@@ -76,6 +93,7 @@ interface ComponentRenderNode {
   edges: LineSegments<BufferGeometry, LineBasicMaterial>
   group: Group
   materialOverlayRoot: Group
+  roiOverlayRoot: Group
   surface: Mesh<BufferGeometry, MeshStandardMaterial>
   transformOverlayRoot: Group
 }
@@ -89,6 +107,8 @@ interface ViewerRuntime {
   nodes: Map<number, ComponentRenderNode>
   raycaster: Raycaster
   renderer: WebGLRenderer
+  roiPreviewKey: string
+  roiPreviewRoot: Group
   scene: Scene
   showGrid: boolean
 }
@@ -97,6 +117,13 @@ interface ViewerMaterialStyle {
   color: Color
   metalness: number
   roughness: number
+}
+
+interface ViewerBoxDrag {
+  startX: number
+  startY: number
+  currentX: number
+  currentY: number
 }
 
 const componentPalette = [
@@ -306,8 +333,11 @@ function fitCamera(
   runtime: ViewerRuntime,
   preset: ViewerCameraPreset,
 ): void {
-  runtime.modelRoot.updateMatrixWorld(true)
-  const bounds = new Box3().setFromObject(runtime.modelRoot)
+  const fitRoot = runtime.roiPreviewRoot.visible
+    ? runtime.roiPreviewRoot
+    : runtime.modelRoot
+  fitRoot.updateMatrixWorld(true)
+  const bounds = new Box3().setFromObject(fitRoot)
   if (bounds.isEmpty()) return
 
   const center = bounds.getCenter(new Vector3())
@@ -400,6 +430,7 @@ function createComponentNode(
   edges.renderOrder = 100 + index
 
   const materialOverlayRoot = new Group()
+  const roiOverlayRoot = new Group()
   const transformOverlayRoot = new Group()
   const group = new Group()
   group.name = `component-${component.component_id}`
@@ -408,6 +439,7 @@ function createComponentNode(
     surface,
     edges,
     materialOverlayRoot,
+    roiOverlayRoot,
     transformOverlayRoot,
   )
 
@@ -418,6 +450,7 @@ function createComponentNode(
     edges,
     group,
     materialOverlayRoot,
+    roiOverlayRoot,
     surface,
     transformOverlayRoot,
   }
@@ -429,11 +462,19 @@ export function ThreeViewerCanvas({
   cameraPreset,
   cameraRequestId,
   renderMode,
+  roiBoxSelectionArmed,
+  roiFaceIds,
+  roiScopes,
+  onRoiBoxSelection,
   onStatusMessage,
 }: ThreeViewerCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const runtimeRef = useRef<ViewerRuntime | null>(null)
+  const roiBoxSelectionArmedRef = useRef(roiBoxSelectionArmed)
+  const onRoiBoxSelectionRef = useRef(onRoiBoxSelection)
+  const boxDragRef = useRef<ViewerBoxDrag | null>(null)
   const [rendererError, setRendererError] = useState('')
+  const [boxDrag, setBoxDrag] = useState<ViewerBoxDrag | null>(null)
   const selectedComponentIds = useWorkspaceStore(
     workspaceSelectors.selectedComponentIds,
   )
@@ -450,6 +491,14 @@ export function ThreeViewerCanvas({
     workspaceSelectors.transformRules,
   )
   const actions = useWorkspaceStore(workspaceSelectors.actions)
+
+  useEffect(() => {
+    roiBoxSelectionArmedRef.current = roiBoxSelectionArmed
+  }, [roiBoxSelectionArmed])
+
+  useEffect(() => {
+    onRoiBoxSelectionRef.current = onRoiBoxSelection
+  }, [onRoiBoxSelection])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -503,7 +552,10 @@ export function ThreeViewerCanvas({
     }
 
     const modelRoot = new Group()
-    threeScene.add(modelRoot)
+    const roiPreviewRoot = new Group()
+    roiPreviewRoot.name = 'roi-preview-root'
+    roiPreviewRoot.visible = false
+    threeScene.add(modelRoot, roiPreviewRoot)
     threeScene.add(new HemisphereLight(0xe7f5ff, 0x182337, 2.5))
     const keyLight = new DirectionalLight(0xffffff, 3.2)
     keyLight.position.set(1.5, -2.2, 3.4)
@@ -556,6 +608,8 @@ export function ThreeViewerCanvas({
       nodes,
       raycaster: new Raycaster(),
       renderer,
+      roiPreviewKey: '',
+      roiPreviewRoot,
       scene: threeScene,
       showGrid: false,
     }
@@ -618,13 +672,137 @@ export function ThreeViewerCanvas({
     }
     animationFrame = window.requestAnimationFrame(animate)
 
+    const canvasPoint = (event: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      return {
+        x: Math.min(
+          Math.max(event.clientX - rect.left, 0),
+          Math.max(rect.width, 1),
+        ),
+        y: Math.min(
+          Math.max(event.clientY - rect.top, 0),
+          Math.max(rect.height, 1),
+        ),
+      }
+    }
+    const resolveBoxSelection = (
+      selection: ViewerBoxDrag,
+    ): RoiBoxSelectionResult | null => {
+      const rect = canvas.getBoundingClientRect()
+      if (rect.width < 1 || rect.height < 1) return null
+      const minX = Math.min(selection.startX, selection.currentX)
+      const maxX = Math.max(selection.startX, selection.currentX)
+      const minY = Math.min(selection.startY, selection.currentY)
+      const maxY = Math.max(selection.startY, selection.currentY)
+      const viewDirection = camera.getWorldDirection(new Vector3())
+      const projectionPlane = new Plane().setFromNormalAndCoplanarPoint(
+        viewDirection,
+        controls.target,
+      )
+      const boxRaycaster = new Raycaster()
+      const points: Vector3[] = []
+
+      for (const [x, y] of [
+        [minX, minY],
+        [maxX, minY],
+        [maxX, maxY],
+        [minX, maxY],
+      ]) {
+        const pointer = new Vector2(
+          (x / rect.width) * 2 - 1,
+          -(y / rect.height) * 2 + 1,
+        )
+        boxRaycaster.setFromCamera(pointer, camera)
+        const point = boxRaycaster.ray.intersectPlane(
+          projectionPlane,
+          new Vector3(),
+        )
+        if (point) points.push(point)
+      }
+
+      if (points.length !== 4) return null
+      const xValues = points.map((point) => point.x)
+      const yValues = points.map((point) => point.y)
+      return {
+        clipBox: {
+          xMin: Math.min(...xValues),
+          xMax: Math.max(...xValues),
+          yMin: Math.min(...yValues),
+          yMax: Math.max(...yValues),
+        },
+        view:
+          camera.position.z < controls.target.z
+            ? 'back_neg_xy'
+            : 'front_xy',
+      }
+    }
+
     let pointerDown: { x: number; y: number } | null = null
     const handlePointerDown = (event: PointerEvent) => {
       if (event.button !== 0) return
+      if (roiBoxSelectionArmedRef.current) {
+        event.preventDefault()
+        pointerDown = null
+        const point = canvasPoint(event)
+        const selection = {
+          startX: point.x,
+          startY: point.y,
+          currentX: point.x,
+          currentY: point.y,
+        }
+        boxDragRef.current = selection
+        setBoxDrag(selection)
+        canvas.setPointerCapture(event.pointerId)
+        return
+      }
       pointerDown = { x: event.clientX, y: event.clientY }
     }
+    const handlePointerMove = (event: PointerEvent) => {
+      const selection = boxDragRef.current
+      if (!selection) return
+      const point = canvasPoint(event)
+      const nextSelection = {
+        ...selection,
+        currentX: point.x,
+        currentY: point.y,
+      }
+      boxDragRef.current = nextSelection
+      setBoxDrag(nextSelection)
+    }
     const handlePointerUp = (event: PointerEvent) => {
-      if (event.button !== 0 || !pointerDown) return
+      if (event.button !== 0) return
+      const selection = boxDragRef.current
+      if (selection) {
+        const point = canvasPoint(event)
+        const completedSelection = {
+          ...selection,
+          currentX: point.x,
+          currentY: point.y,
+        }
+        boxDragRef.current = null
+        setBoxDrag(null)
+        if (canvas.hasPointerCapture(event.pointerId)) {
+          canvas.releasePointerCapture(event.pointerId)
+        }
+        const movement =
+          Math.abs(completedSelection.currentX - completedSelection.startX) +
+          Math.abs(completedSelection.currentY - completedSelection.startY)
+        if (movement <= 8) {
+          actions.setRoiBoxSelectionArmed(false)
+          onStatusMessage('ROI 박스 선택을 취소했습니다.')
+          return
+        }
+
+        const result = resolveBoxSelection(completedSelection)
+        if (!result) {
+          actions.setRoiBoxSelectionArmed(false)
+          onStatusMessage('ROI 박스의 모델 좌표를 계산하지 못했습니다.')
+          return
+        }
+        onRoiBoxSelectionRef.current(result)
+        return
+      }
+      if (!pointerDown) return
       const movement = Math.hypot(
         event.clientX - pointerDown.x,
         event.clientY - pointerDown.y,
@@ -684,11 +862,14 @@ export function ThreeViewerCanvas({
     }
     const handlePointerCancel = () => {
       pointerDown = null
+      boxDragRef.current = null
+      setBoxDrag(null)
     }
     const preventContextMenu = (event: MouseEvent) =>
       event.preventDefault()
 
     canvas.addEventListener('pointerdown', handlePointerDown)
+    canvas.addEventListener('pointermove', handlePointerMove)
     canvas.addEventListener('pointerup', handlePointerUp)
     canvas.addEventListener('pointercancel', handlePointerCancel)
     canvas.addEventListener('dblclick', handleDoubleClick)
@@ -698,6 +879,7 @@ export function ThreeViewerCanvas({
       window.cancelAnimationFrame(animationFrame)
       resizeObserver.disconnect()
       canvas.removeEventListener('pointerdown', handlePointerDown)
+      canvas.removeEventListener('pointermove', handlePointerMove)
       canvas.removeEventListener('pointerup', handlePointerUp)
       canvas.removeEventListener('pointercancel', handlePointerCancel)
       canvas.removeEventListener('dblclick', handleDoubleClick)
@@ -726,6 +908,173 @@ export function ThreeViewerCanvas({
     const runtime = runtimeRef.current
     if (!runtime) return
 
+    runtime.controls.noRotate = roiBoxSelectionArmed
+    if (roiBoxSelectionArmed) {
+      runtime.roiPreviewRoot.visible = false
+      runtime.modelRoot.visible = true
+      const preset =
+        runtime.camera.position.z < runtime.controls.target.z
+          ? '-XY'
+          : 'XY'
+      fitCamera(runtime, preset)
+      onStatusMessage(
+        `ROI 박스 선택 · ${preset} view · 왼쪽 드래그로 범위를 지정하세요.`,
+      )
+    }
+  }, [onStatusMessage, roiBoxSelectionArmed, scene])
+
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (!runtime) return
+
+    const activeBoxScopes = roiScopes.filter(
+      (scope) => scope.active && scope.clipBox,
+    )
+    const showRoiPreview =
+      activeBoxScopes.length > 0 && !roiBoxSelectionArmed
+    const previewKey = JSON.stringify({
+      scopes: activeBoxScopes.map((scope) => ({
+        id: scope.id,
+        box: scope.clipBox,
+        faces: scope.components.flatMap(
+          (component) => component.faceIds,
+        ),
+      })),
+      hiddenComponentIds,
+      deletedComponentIds,
+      renderMode,
+    })
+
+    if (showRoiPreview && runtime.roiPreviewKey !== previewKey) {
+      clearGroup(runtime.roiPreviewRoot)
+      const boxFaceIds = [
+        ...new Set(
+          activeBoxScopes.flatMap((scope) =>
+            scope.components.flatMap(
+              (component) => component.faceIds,
+            ),
+          ),
+        ),
+      ]
+      const clipBoxes = activeBoxScopes.flatMap((scope) =>
+        scope.clipBox ? [scope.clipBox] : [],
+      )
+      const clipped = buildRoiClippedGeometries(
+        scene,
+        boxFaceIds,
+        clipBoxes,
+        [...hiddenComponentIds, ...deletedComponentIds],
+      )
+      if (clipped && clipped.openChainCount === 0) {
+        const isWireframe = renderMode === 'Wireframe'
+        const surface = new Mesh(
+          clipped.surfaceGeometry,
+          new MeshStandardMaterial({
+            color: 0x8fb3c7,
+            roughness: 0.72,
+            metalness: 0.04,
+            flatShading: false,
+            transparent: isWireframe,
+            opacity: isWireframe ? wireframeSurfaceOpacity : 1,
+            side: DoubleSide,
+            depthWrite: true,
+          }),
+        )
+        surface.name = 'roi-clipped-surface'
+        runtime.roiPreviewRoot.add(surface)
+
+        if (clipped.capGeometry) {
+          const caps = new Mesh(
+            clipped.capGeometry,
+            new MeshStandardMaterial({
+              color: 0x6f9fb5,
+              roughness: 0.78,
+              metalness: 0.02,
+              flatShading: false,
+              transparent: isWireframe,
+              opacity: isWireframe ? 0.82 : 1,
+              side: DoubleSide,
+              depthTest: true,
+              depthWrite: true,
+            }),
+          )
+          caps.name = 'roi-section-caps'
+          caps.renderOrder = 1
+          runtime.roiPreviewRoot.add(caps)
+        }
+
+        const showEdges = renderMode !== 'Surface'
+        if (showEdges && clipped.featureEdgeGeometry) {
+          const featureEdges = new LineSegments(
+            clipped.featureEdgeGeometry,
+            new LineBasicMaterial({
+              color: 0xd7edf8,
+              transparent: true,
+              opacity: isWireframe ? 0.96 : 0.74,
+              depthTest: true,
+              depthWrite: false,
+            }),
+          )
+          featureEdges.name = 'roi-feature-edges'
+          featureEdges.renderOrder = 3
+          runtime.roiPreviewRoot.add(featureEdges)
+        }
+        if (showEdges && clipped.capEdgeGeometry) {
+          const capEdges = new LineSegments(
+            clipped.capEdgeGeometry,
+            new LineBasicMaterial({
+              color: 0xe0f2fe,
+              transparent: true,
+              opacity: 0.9,
+              depthTest: true,
+              depthWrite: false,
+            }),
+          )
+          capEdges.name = 'roi-cap-edges'
+          capEdges.renderOrder = 4
+          runtime.roiPreviewRoot.add(capEdges)
+        }
+
+        runtime.roiPreviewRoot.userData.capLoopCount =
+          clipped.capLoopCount
+        runtime.roiPreviewRoot.userData.clippedTriangleCount =
+          clipped.clippedTriangleCount
+        runtime.roiPreviewRoot.userData.clippedVertexCount =
+          clipped.clippedVertexCount
+        runtime.roiPreviewRoot.visible = true
+        runtime.modelRoot.visible = false
+        runtime.roiPreviewKey = previewKey
+        fitCamera(runtime, 'Fit')
+        onStatusMessage(
+          `ROI isolated solid · ${clipped.clippedTriangleCount.toLocaleString()} triangles · ${clipped.capLoopCount} section caps`,
+        )
+      } else {
+        clipped?.surfaceGeometry.dispose()
+        clipped?.capGeometry?.dispose()
+        clipped?.capEdgeGeometry?.dispose()
+        clipped?.featureEdgeGeometry?.dispose()
+        clearGroup(runtime.roiPreviewRoot)
+        runtime.roiPreviewRoot.visible = false
+        runtime.modelRoot.visible = true
+        runtime.roiPreviewKey = previewKey
+        onStatusMessage(
+          clipped
+            ? `ROI section cap 무결성 오류 · 열린 경계 ${clipped.openChainCount}개`
+            : 'ROI clipping geometry를 생성하지 못했습니다.',
+        )
+      }
+    } else if (
+      showRoiPreview &&
+      runtime.roiPreviewRoot.children.length > 0
+    ) {
+      runtime.roiPreviewRoot.visible = true
+      runtime.modelRoot.visible = false
+    } else if (!showRoiPreview) {
+      runtime.roiPreviewRoot.visible = false
+      runtime.modelRoot.visible = true
+    }
+
+    const roiFaceSet = new Set(roiFaceIds)
     for (const [componentId, node] of runtime.nodes) {
       const isSelected = selectedComponentIds.includes(componentId)
       const isUnavailable =
@@ -778,8 +1127,43 @@ export function ThreeViewerCanvas({
           : 0.72
 
       clearGroup(node.materialOverlayRoot)
+      clearGroup(node.roiOverlayRoot)
       clearGroup(node.transformOverlayRoot)
       node.materialOverlayRoot.visible = renderMode !== 'Wireframe'
+
+      const componentRoiFaceIds = node.component.face_indices.filter(
+        (faceId) => roiFaceSet.has(faceId),
+      )
+      if (componentRoiFaceIds.length > 0) {
+        const bundle = createFaceGeometry(
+          scene,
+          componentRoiFaceIds,
+          node.center,
+        )
+        if (bundle.faceIds.length > 0) {
+          const overlay = new Mesh(
+            bundle.geometry,
+            new MeshStandardMaterial({
+              color: 0xfacc15,
+              emissive: 0x713f12,
+              emissiveIntensity: 0.55,
+              roughness: 0.58,
+              side: DoubleSide,
+              transparent: true,
+              opacity: renderMode === 'Wireframe' ? 0.76 : 0.58,
+              depthWrite: false,
+              polygonOffset: true,
+              polygonOffsetFactor: -2,
+              polygonOffsetUnits: -2,
+            }),
+          )
+          overlay.name = `roi-highlight-${componentId}`
+          overlay.renderOrder = 5
+          node.roiOverlayRoot.add(overlay)
+        } else {
+          bundle.geometry.dispose()
+        }
+      }
 
       const faceAssignments = materialAssignments.filter(
         (assignment) =>
@@ -851,9 +1235,13 @@ export function ThreeViewerCanvas({
     hiddenComponentIds,
     materialAssignments,
     renderMode,
+    roiBoxSelectionArmed,
+    roiFaceIds,
+    roiScopes,
     scene,
     selectedComponentIds,
     transformRules,
+    onStatusMessage,
   ])
 
   return (
@@ -863,18 +1251,33 @@ export function ThreeViewerCanvas({
     >
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 size-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset"
+        className={`absolute inset-0 size-full touch-none outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset ${
+          roiBoxSelectionArmed ? 'cursor-crosshair' : ''
+        }`}
         aria-label="Interactive 3D CAD viewer"
         aria-describedby="three-viewer-controls"
         data-scene-token={scene.metadata.scene_token}
         tabIndex={0}
       />
+      {boxDrag ? (
+        <div
+          data-testid="roi-box-selection"
+          className="pointer-events-none absolute z-20 border border-warning bg-warning/15 shadow-[0_0_0_1px_rgba(250,204,21,0.2)]"
+          style={{
+            left: Math.min(boxDrag.startX, boxDrag.currentX),
+            top: Math.min(boxDrag.startY, boxDrag.currentY),
+            width: Math.abs(boxDrag.currentX - boxDrag.startX),
+            height: Math.abs(boxDrag.currentY - boxDrag.startY),
+          }}
+        />
+      ) : null}
       <div
         id="three-viewer-controls"
         className="pointer-events-none absolute bottom-3 left-3 rounded-lg border border-border/70 bg-background/70 px-2.5 py-1.5 text-[0.62rem] text-muted-foreground backdrop-blur"
       >
-        Drag rotate · Wheel zoom · Right drag pan · Click face · Shift
-        multi-select
+        {roiBoxSelectionArmed
+          ? 'ROI mode · Left drag select · Wheel zoom · Right drag pan'
+          : 'Drag rotate · Wheel zoom · Right drag pan · Click face · Shift multi-select'}
       </div>
       {rendererError ? (
         <div className="absolute inset-0 flex items-center justify-center bg-background/85 p-6 text-center">

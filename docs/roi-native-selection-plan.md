@@ -3,6 +3,14 @@
 ## 상태
 코드 구현 완료 (로컬 전용). Python 백엔드(`types.py`/`roi.py`) 단위 테스트 9/9 통과, `run_web.py` UI 배선 완료. 아직 브라우저 클릭 테스트(실제 드래그 동작 확인)는 안 함 - 팀 확인 + 사용성 검증 끝난 뒤 커밋/푸시 예정.
 
+> React 전환 Step 09에서는 분석 입력의 `face_id[]` 계약은 유지하되,
+> Viewer 표시만 face 전체 포함 방식에서 정밀 triangle clipping과
+> 폐곡선 section cap 방식으로 교체했다. 따라서 아래 V1의
+> whole-face 판정 설명은 분석 대상 face 수집 규칙이고, 화면 경계
+> geometry 생성 규칙은
+> `docs/changes/2026-07-24_frontend-roi-selection-and-solid-clipping.md`를
+> 따른다.
+
 ## 배경
 
 - 현재(`docs/changes/2026-07-08_web-ui-v0.3.4-3d-roi-picking.md` ~ `v0.4.5`): Canvas 뷰어에서 Face 클릭 토글 + 좌측 패널 체크박스. `ROI 선택 방식`은 `Combined`/`3D click only`/`Left panel only` 3가지.

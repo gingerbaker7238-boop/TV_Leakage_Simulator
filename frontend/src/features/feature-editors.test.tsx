@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ComponentTreePanel } from '@/features/components'
 import { MaterialEditorDialog } from '@/features/materials'
+import { RoiSelectionPanel } from '@/features/roi'
 import { TransformEditorDialog } from '@/features/transforms'
 import { ViewerWorkspace } from '@/components/layout/viewer-workspace'
 import { workspaceStore } from '@/stores'
@@ -68,8 +69,46 @@ describe('Step 07·08 feature editors', () => {
 
     expect(screen.getByText('Face 0')).not.toBeNull()
     expect(
-      screen.getByText('2 visible · 1 component · 1 face'),
+      screen.getByText('2 visible · 1 component · 1 face · 0 ROI'),
     ).not.toBeNull()
+  })
+
+  it('adds and activates a coordinate ROI scope', () => {
+    render(<RoiSelectionPanel scene={createSceneFixture()} />)
+
+    fireEvent.change(screen.getByLabelText('ROI 이름'), {
+      target: { value: 'rear-point' },
+    })
+    fireEvent.change(screen.getByLabelText('ROI X coordinate'), {
+      target: { value: '38' },
+    })
+    fireEvent.change(screen.getByLabelText('ROI Y coordinate'), {
+      target: { value: '22' },
+    })
+    fireEvent.change(screen.getByLabelText('ROI Z coordinate'), {
+      target: { value: '13' },
+    })
+    fireEvent.click(
+      screen.getByRole('button', { name: '좌표로 ROI 추가' }),
+    )
+
+    expect(screen.getByText('rear-point')).not.toBeNull()
+    expect(workspaceStore.getState().roiScopes).toEqual([
+      expect.objectContaining({
+        scopeId: 'rear-point',
+        source: 'point',
+        active: true,
+        components: [
+          expect.objectContaining({
+            componentId: 2,
+            faceIds: [3],
+          }),
+        ],
+      }),
+    ])
+
+    fireEvent.click(screen.getByLabelText('rear-point 활성화'))
+    expect(workspaceStore.getState().roiScopes[0].active).toBe(false)
   })
 
   it('connects component selection, visibility, traceability, and rename to Zustand', () => {

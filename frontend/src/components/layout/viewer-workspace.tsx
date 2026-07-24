@@ -1,4 +1,10 @@
-import { lazy, Suspense, useState } from 'react'
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useMemo,
+  useState,
+} from 'react'
 import type { ScenePayload } from '@/api'
 import {
   BoxSelect,
@@ -12,9 +18,15 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type {
+  RoiBoxSelectionResult,
   ViewerCameraPreset,
   ViewerRenderMode,
 } from '@/features/viewer'
+import {
+  getActiveRoiFaceIds,
+  groupRoiFacesByComponent,
+  resolveFacesInRoiBox,
+} from '@/features/roi'
 import {
   useWorkspaceStore,
   workspaceSelectors,
@@ -70,6 +82,64 @@ export function ViewerWorkspace({
   const deletedComponentIds = useWorkspaceStore(
     workspaceSelectors.deletedComponentIds,
   )
+  const componentNameOverrides = useWorkspaceStore(
+    workspaceSelectors.componentNameOverrides,
+  )
+  const roiScopes = useWorkspaceStore(workspaceSelectors.roiScopes)
+  const roiBoxSelectionArmed = useWorkspaceStore(
+    workspaceSelectors.roiBoxSelectionArmed,
+  )
+  const roiDraftLabel = useWorkspaceStore(
+    workspaceSelectors.roiDraftLabel,
+  )
+  const actions = useWorkspaceStore(workspaceSelectors.actions)
+  const activeRoiFaceIds = useMemo(
+    () => getActiveRoiFaceIds(roiScopes, deletedComponentIds),
+    [deletedComponentIds, roiScopes],
+  )
+  const addBoxRoi = useCallback(
+    ({ clipBox, view }: RoiBoxSelectionResult) => {
+      if (!scene) return
+
+      const faceIds = resolveFacesInRoiBox(
+        scene,
+        clipBox,
+        hiddenComponentIds,
+        deletedComponentIds,
+      )
+      actions.setRoiBoxSelectionArmed(false)
+      if (faceIds.length === 0) {
+        setStatusMessage(
+          'ROI 선택 결과가 없습니다. 박스 위치와 component 표시 상태를 확인하세요.',
+        )
+        return
+      }
+
+      const components = groupRoiFacesByComponent(
+        scene,
+        faceIds,
+        componentNameOverrides,
+      )
+      actions.addRoiScope({
+        label: roiDraftLabel,
+        source: 'box',
+        view,
+        components,
+        clipBox,
+      })
+      setStatusMessage(
+        `ROI 추가 · ${components.length} components · ${faceIds.length.toLocaleString()} faces`,
+      )
+    },
+    [
+      actions,
+      componentNameOverrides,
+      deletedComponentIds,
+      hiddenComponentIds,
+      roiDraftLabel,
+      scene,
+    ],
+  )
 
   const components = (scene?.components ?? []).filter(
     (component) =>
@@ -87,7 +157,7 @@ export function ViewerWorkspace({
           <div>
             <h1 className="text-sm font-semibold">3D Viewer</h1>
             <p className="text-[0.7rem] text-muted-foreground">
-              Three.js mesh · component and face picking · Step 08
+              Three.js mesh · ROI selection and face picking · Step 09
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -208,6 +278,11 @@ export function ViewerWorkspace({
                   : ''}
               </Badge>
             ) : null}
+            {activeRoiFaceIds.length > 0 ? (
+              <Badge className="bg-warning/15 text-warning">
+                ROI {activeRoiFaceIds.length.toLocaleString()} faces
+              </Badge>
+            ) : null}
           </div>
 
           {isSceneLoading ? (
@@ -269,6 +344,10 @@ export function ViewerWorkspace({
                 cameraPreset={cameraPreset}
                 cameraRequestId={cameraRequestId}
                 renderMode={renderMode}
+                roiBoxSelectionArmed={roiBoxSelectionArmed}
+                roiFaceIds={activeRoiFaceIds}
+                roiScopes={roiScopes}
+                onRoiBoxSelection={addBoxRoi}
                 onStatusMessage={setStatusMessage}
               />
             </Suspense>
@@ -281,8 +360,8 @@ export function ViewerWorkspace({
         <span className="hidden shrink-0 items-center gap-1 sm:flex">
           <CircleDot className="size-3 text-primary" />
           {scene
-            ? `${visibleComponentCount} visible · ${selectedComponentIds.length} component · ${selectedFaceIds.length} face`
-            : 'Three.js Viewer · Step 08'}
+            ? `${visibleComponentCount} visible · ${selectedComponentIds.length} component · ${selectedFaceIds.length} face · ${activeRoiFaceIds.length} ROI`
+            : 'Three.js Viewer · Step 09'}
         </span>
       </footer>
     </main>
