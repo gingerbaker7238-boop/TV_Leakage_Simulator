@@ -1,8 +1,7 @@
+import type { ScenePayload } from '@/api'
 import {
   BoxSelect,
   ChevronRight,
-  FileBox,
-  FolderOpen,
   Layers3,
   Move3D,
   Palette,
@@ -12,8 +11,14 @@ import {
   Workflow,
 } from 'lucide-react'
 
+import { ModelImportCard } from '@/features/cad'
+import {
+  ComponentTreePanel,
+  type ComponentEditorRequest,
+} from '@/features/components'
+import { MaterialAssignmentPanel } from '@/features/materials'
+import { TransformRulePanel } from '@/features/transforms'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -43,7 +48,12 @@ interface WorkflowSection {
 interface WorkflowSidebarProps {
   activeSection: WorkflowSectionId
   onActiveSectionChange(section: WorkflowSectionId): void
-  onFeatureNotice(title: string, description: string): void
+  scene?: ScenePayload
+  isSceneLoading?: boolean
+  sceneErrorMessage?: string
+  onEditMaterial(request: ComponentEditorRequest): void
+  onEditTransform(request: ComponentEditorRequest): void
+  onDeleteComponent(request: ComponentEditorRequest): void
 }
 
 const workflowSections: WorkflowSection[] = [
@@ -94,50 +104,84 @@ const workflowSections: WorkflowSection[] = [
 export function WorkflowSidebar({
   activeSection,
   onActiveSectionChange,
-  onFeatureNotice,
+  scene,
+  isSceneLoading = false,
+  sceneErrorMessage,
+  onEditMaterial,
+  onEditTransform,
+  onDeleteComponent,
 }: WorkflowSidebarProps) {
   const activeSectionInfo =
     workflowSections.find((section) => section.id === activeSection) ??
     workflowSections[0]
+  const sceneStatus = isSceneLoading
+    ? 'Loading scene and component tree…'
+    : sceneErrorMessage
+      ? 'Scene load failed'
+      : scene
+        ? `${scene.metadata.face_count.toLocaleString()} faces · ${scene.metadata.component_count} components`
+        : undefined
+
+  const activePanel = (() => {
+    if (activeSection === 'components') {
+      return (
+        <ComponentTreePanel
+          scene={scene}
+          isLoading={isSceneLoading}
+          errorMessage={sceneErrorMessage}
+          onEditMaterial={onEditMaterial}
+          onEditTransform={onEditTransform}
+          onDelete={onDeleteComponent}
+        />
+      )
+    }
+
+    if (activeSection === 'material') {
+      return (
+        <MaterialAssignmentPanel
+          scene={scene}
+          onEditMaterial={onEditMaterial}
+        />
+      )
+    }
+
+    if (activeSection === 'transform') {
+      return (
+        <TransformRulePanel
+          scene={scene}
+          onEditTransform={onEditTransform}
+        />
+      )
+    }
+
+    return (
+      <>
+        <p className="text-xs leading-5 text-muted-foreground">
+          {activeSectionInfo.description}
+        </p>
+        <Badge
+          variant="outline"
+          className="mt-3 border-border bg-background/40 text-muted-foreground"
+        >
+          Planned migration
+        </Badge>
+      </>
+    )
+  })()
+
+  const isStepSevenSection =
+    activeSection === 'components' ||
+    activeSection === 'material' ||
+    activeSection === 'transform'
 
   return (
     <aside className="border-b border-border bg-sidebar lg:min-h-0 lg:border-r lg:border-b-0">
       <ScrollArea className="h-[38rem] lg:h-full">
         <div className="space-y-4 p-3">
-          <Card
-            size="sm"
-            className="border-border/80 bg-card/75 shadow-none"
-          >
-            <CardHeader>
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <CardDescription>Step 01</CardDescription>
-                  <CardTitle>Model import</CardTitle>
-                </div>
-                <FileBox className="size-5 text-primary" aria-hidden="true" />
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="rounded-lg border border-dashed border-border bg-muted/20 px-3 py-3">
-                <div className="text-xs font-medium">No CAD selected</div>
-                <div className="mt-1 text-[0.7rem] text-muted-foreground">
-                  STEP · X_T · STL · OBJ
-                </div>
-              </div>
-              <Button
-                className="w-full"
-                onClick={() =>
-                  onFeatureNotice(
-                    'Model import',
-                    'Upload API와 Scene query는 준비되어 있습니다. 실제 파일 선택과 Viewer 연결은 기능 이전 단계에서 활성화합니다.',
-                  )
-                }
-              >
-                <FolderOpen data-icon="inline-start" />
-                Import CAD
-              </Button>
-            </CardContent>
-          </Card>
+          <ModelImportCard
+            sceneStatus={sceneStatus}
+            onImported={() => onActiveSectionChange('components')}
+          />
 
           <section aria-labelledby="workflow-navigation-title">
             <div className="mb-2 flex items-center justify-between px-1">
@@ -210,19 +254,21 @@ export function WorkflowSidebar({
               <CardDescription>
                 Step {activeSectionInfo.step}
               </CardDescription>
-              <CardTitle>{activeSectionInfo.label}</CardTitle>
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle>{activeSectionInfo.label}</CardTitle>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    isStepSevenSection
+                      ? 'border-primary/25 bg-primary/8 text-primary'
+                      : 'border-border text-muted-foreground',
+                  )}
+                >
+                  {isStepSevenSection ? 'Migrated · 07' : 'Queued'}
+                </Badge>
+              </div>
             </CardHeader>
-            <CardContent>
-              <p className="text-xs leading-5 text-muted-foreground">
-                {activeSectionInfo.description}
-              </p>
-              <Badge
-                variant="outline"
-                className="mt-3 border-border bg-background/40 text-muted-foreground"
-              >
-                Data wiring · Step 07
-              </Badge>
-            </CardContent>
+            <CardContent>{activePanel}</CardContent>
           </Card>
         </div>
       </ScrollArea>

@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
+import { useSceneQuery } from '@/api'
 import { Box, CircleDot, Info } from 'lucide-react'
 
-import { AppDialog } from '@/components/common'
+import { AppDialog, ConfirmationDialog } from '@/components/common'
 import { ViewerWorkspace } from '@/components/layout/viewer-workspace'
 import {
   WorkflowSidebar,
@@ -9,21 +10,63 @@ import {
 } from '@/components/layout/workflow-sidebar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import type { ComponentEditorRequest } from '@/features/components'
+import { getComponentDisplayName } from '@/features/components'
+import { MaterialEditorDialog } from '@/features/materials'
+import { TransformEditorDialog } from '@/features/transforms'
+import {
+  useWorkspaceStore,
+  workspaceSelectors,
+} from '@/stores'
+
+type ComponentDialogType = 'material' | 'transform' | 'delete'
 
 export function SimulatorShell() {
   const [activeSection, setActiveSection] =
     useState<WorkflowSectionId>('components')
+  const [componentDialog, setComponentDialog] = useState<{
+    type: ComponentDialogType
+    componentId: number
+  } | null>(null)
   const [noticeDialog, setNoticeDialog] = useState<{
     title: string
     description: string
   } | null>(null)
   const noticeReturnFocusRef = useRef<HTMLElement>(null)
+  const componentReturnFocusRef = useRef<HTMLElement>(null)
+  const activeCad = useWorkspaceStore(workspaceSelectors.activeCad)
+  const nameOverrides = useWorkspaceStore(
+    workspaceSelectors.componentNameOverrides,
+  )
+  const actions = useWorkspaceStore(workspaceSelectors.actions)
+  const sceneQuery = useSceneQuery(activeCad?.path ?? '')
+  const scene = sceneQuery.data
+  const sceneErrorMessage = sceneQuery.error?.message
+  const activeComponent =
+    scene?.components.find(
+      (component) =>
+        component.component_id === componentDialog?.componentId,
+    ) ?? null
+  const activeComponentName = activeComponent
+    ? getComponentDisplayName(activeComponent, nameOverrides)
+    : ''
 
   const openFeatureNotice = (title: string, description: string) => {
     if (document.activeElement instanceof HTMLElement) {
       noticeReturnFocusRef.current = document.activeElement
     }
     setNoticeDialog({ title, description })
+  }
+
+  const openComponentDialog = (
+    type: ComponentDialogType,
+    request: ComponentEditorRequest,
+  ) => {
+    componentReturnFocusRef.current = request.returnFocusElement
+    setComponentDialog({
+      type,
+      componentId: request.componentId,
+    })
   }
 
   return (
@@ -45,7 +88,7 @@ export function SimulatorShell() {
             variant="outline"
             className="hidden border-primary/30 bg-primary/10 text-primary md:inline-flex"
           >
-            Migration · Layout 06
+            Migration · Features 07
           </Badge>
         </div>
         <div className="flex items-center gap-2">
@@ -59,8 +102,8 @@ export function SimulatorShell() {
             aria-label="Layout guide"
             onClick={() =>
               openFeatureNotice(
-                'Layout migration boundary',
-                '이번 단계는 App Shell, Dialog와 Context Menu의 공통 기반만 이전합니다. Component Tree와 Material·Transform 데이터 연결은 다음 단계에서 진행합니다.',
+                'Feature migration boundary',
+                'Component Tree, Material assignment와 Transform rule 상태는 React에 연결되었습니다. 실제 mesh 렌더링과 face picking은 Three.js Viewer 이전 단계에서 진행합니다.',
               )
             }
           >
@@ -74,9 +117,33 @@ export function SimulatorShell() {
         <WorkflowSidebar
           activeSection={activeSection}
           onActiveSectionChange={setActiveSection}
-          onFeatureNotice={openFeatureNotice}
+          scene={scene}
+          isSceneLoading={sceneQuery.isPending && activeCad !== null}
+          sceneErrorMessage={sceneErrorMessage}
+          onEditMaterial={(request) =>
+            openComponentDialog('material', request)
+          }
+          onEditTransform={(request) =>
+            openComponentDialog('transform', request)
+          }
+          onDeleteComponent={(request) =>
+            openComponentDialog('delete', request)
+          }
         />
-        <ViewerWorkspace />
+        <ViewerWorkspace
+          scene={scene}
+          isSceneLoading={sceneQuery.isPending && activeCad !== null}
+          sceneErrorMessage={sceneErrorMessage}
+          onEditMaterial={(request) =>
+            openComponentDialog('material', request)
+          }
+          onEditTransform={(request) =>
+            openComponentDialog('transform', request)
+          }
+          onDeleteComponent={(request) =>
+            openComponentDialog('delete', request)
+          }
+        />
       </div>
 
       <AppDialog
@@ -98,6 +165,47 @@ export function SimulatorShell() {
           계층에서 처리합니다.
         </div>
       </AppDialog>
+
+      <MaterialEditorDialog
+        open={componentDialog?.type === 'material'}
+        onOpenChange={(open) => {
+          if (!open) setComponentDialog(null)
+        }}
+        component={activeComponent}
+        componentName={activeComponentName}
+        returnFocusRef={componentReturnFocusRef}
+      />
+
+      <TransformEditorDialog
+        open={componentDialog?.type === 'transform'}
+        onOpenChange={(open) => {
+          if (!open) setComponentDialog(null)
+        }}
+        component={activeComponent}
+        componentName={activeComponentName}
+        returnFocusRef={componentReturnFocusRef}
+      />
+
+      <ConfirmationDialog
+        open={componentDialog?.type === 'delete'}
+        onOpenChange={(open) => {
+          if (!open) setComponentDialog(null)
+        }}
+        title={`Delete ${activeComponentName || 'component'}?`}
+        description="Viewer와 ray tracing 대상에서 제외하며 연결된 Material assignment와 Transform rule도 함께 정리합니다. CAD를 다시 Import하면 복원됩니다."
+        confirmLabel="Delete component"
+        cancelLabel="Cancel"
+        destructive
+        returnFocusRef={componentReturnFocusRef}
+        onConfirm={() => {
+          if (!activeComponent) return
+          actions.deleteComponent(
+            activeComponent.component_id,
+            activeComponent.face_indices,
+          )
+          setComponentDialog(null)
+        }}
+      />
     </div>
   )
 }

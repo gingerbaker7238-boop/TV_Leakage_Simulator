@@ -74,4 +74,52 @@ describe('workspace store', () => {
     expect(first.getState().selectedComponentIds).toEqual([7])
     expect(second.getState().selectedComponentIds).toEqual([])
   })
+
+  it('owns component, material, and transform feature state', () => {
+    const store = createWorkspaceStore()
+    const { actions } = store.getState()
+
+    actions.renameComponent(2, 'Chassis rear')
+    actions.toggleComponentVisibility(2)
+    actions.toggleComponentTraceability(2)
+    actions.upsertMaterialAssignment({
+      assignmentId: 'material-part-2',
+      componentId: 2,
+      targetType: 'part',
+      faceIds: [],
+      baseMaterialId: 'black_pc_resin',
+      surfaceId: 'matte_black_resin',
+      profileId: '',
+      bsdfAssetId: '',
+      enabled: true,
+    })
+    actions.upsertTransformRule({
+      ruleId: 'transform-component-2',
+      componentId: 2,
+      targetType: 'component',
+      selectionMethod: 'click',
+      faceIds: [],
+      move: { x: 1, y: 2, z: 3 },
+      tilt: { x: 0, y: 0, z: 5 },
+      enabled: true,
+    })
+
+    expect(store.getState()).toMatchObject({
+      componentNameOverrides: { 2: 'Chassis rear' },
+      hiddenComponentIds: [2],
+      excludedComponentIds: [2],
+    })
+    expect(store.getState().materialAssignments).toHaveLength(1)
+    expect(store.getState().transformRules).toHaveLength(1)
+
+    actions.deleteComponent(2, [3, 4])
+
+    expect(store.getState()).toMatchObject({
+      deletedComponentIds: [2],
+      hiddenComponentIds: [],
+      excludedComponentIds: [],
+      materialAssignments: [],
+      transformRules: [],
+    })
+  })
 })

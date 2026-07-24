@@ -5,9 +5,11 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
 } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
+
+import { AppProviders } from '@/app/providers'
+import { workspaceStore } from '@/stores'
 
 import { SimulatorShell } from './simulator-shell'
 
@@ -29,48 +31,38 @@ if (!Element.prototype.hasPointerCapture) {
   Element.prototype.releasePointerCapture = () => undefined
 }
 
-afterEach(cleanup)
+function renderShell() {
+  return render(
+    <AppProviders>
+      <SimulatorShell />
+    </AppProviders>,
+  )
+}
+
+afterEach(() => {
+  cleanup()
+  workspaceStore.getState().actions.resetWorkspace()
+})
 
 describe('SimulatorShell', () => {
-  it('switches the active workflow section without wiring feature data', () => {
-    render(<SimulatorShell />)
+  it('renders the empty CAD boundary and switches feature panels', () => {
+    renderShell()
 
+    expect(screen.getByText('Empty workspace')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /Step 05 Material/ }))
 
-    expect(
-      screen.getByText(
-        '표면 광학 속성과 부품 assignment를 관리합니다.',
-      ),
-    ).not.toBeNull()
+    expect(screen.getByText('No assignments')).not.toBeNull()
   })
 
-  it('opens the common migration boundary dialog', async () => {
-    render(<SimulatorShell />)
+  it('opens the common feature migration boundary dialog', async () => {
+    renderShell()
 
     fireEvent.click(screen.getByRole('button', { name: /Layout guide/ }))
 
     expect(
       await screen.findByRole('dialog', {
-        name: 'Layout migration boundary',
+        name: 'Feature migration boundary',
       }),
     ).not.toBeNull()
-  })
-
-  it('returns focus to the viewer target after a context action dialog', async () => {
-    render(<SimulatorShell />)
-    const target = screen.getByTestId('component-context-target')
-
-    fireEvent.contextMenu(target)
-    fireEvent.click(
-      await screen.findByRole('menuitem', { name: 'Material' }),
-    )
-    fireEvent.keyDown(
-      await screen.findByRole('dialog', { name: 'Material assignment' }),
-      { key: 'Escape' },
-    )
-
-    await waitFor(() => {
-      expect(document.activeElement).toBe(target)
-    })
   })
 })
