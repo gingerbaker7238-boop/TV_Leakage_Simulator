@@ -98,8 +98,8 @@ const componentPalette = [
 const wireframeSurfaceOpacity = 0.65
 const selectedWireframeSurfaceOpacity = 0.78
 
-function surfaceDepthOffset(depthPriority: number): number {
-  return 2 + depthPriority * 2
+function surfaceDepthUnits(depthPriority: number): number {
+  return 4 + depthPriority * 4
 }
 
 const materialColors: Record<string, number> = {
@@ -266,8 +266,11 @@ function createComponentNode(
     flatShading: false,
     side: DoubleSide,
     polygonOffset: true,
-    polygonOffsetFactor: surfaceDepthOffset(index),
-    polygonOffsetUnits: surfaceDepthOffset(index),
+    // A slope-scaled factor creates visible seams where CAD faces meet.
+    // Constant depth units keep coplanar components deterministic without
+    // moving steep faces farther behind their shared feature edges.
+    polygonOffsetFactor: 0,
+    polygonOffsetUnits: surfaceDepthUnits(index),
   })
   const surface = new Mesh(bundle.geometry, surfaceMaterial)
   surface.name = `component-surface-${component.component_id}`
@@ -612,10 +615,9 @@ export function ThreeViewerCanvas({
           : wireframeSurfaceOpacity
         : 1
       node.surface.material.depthWrite = true
-      node.surface.material.polygonOffsetFactor =
-        surfaceDepthOffset(node.depthPriority)
+      node.surface.material.polygonOffsetFactor = 0
       node.surface.material.polygonOffsetUnits =
-        surfaceDepthOffset(node.depthPriority)
+        surfaceDepthUnits(node.depthPriority)
       node.surface.visible = true
       node.edges.visible = renderMode !== 'Surface'
       node.edges.material.color.set(isSelected ? 0x38bdf8 : 0xb9d5e8)
